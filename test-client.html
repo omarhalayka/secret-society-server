@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Secret Society Test Client</title>
+</head>
+<body>
+
+<h2>Secret Society Socket Test</h2>
+
+<script src="https://cdn.socket.io/4.8.3/socket.io.min.js"></script>
+
+<script>
+    const socket = io("http://localhost:3000");
+
+    socket.on("connect", () => {
+        console.log("Connected to server:", socket.id);
+    });
+
+    socket.on("welcome", (data) => {
+        console.log("Welcome message:", data);
+    });
+
+    socket.emit("set_username", "Omar");
+
+    socket.on("username_updated", (player) => {
+        console.log("Username confirmed by server:", player);
+    });
+
+    socket.emit("join_queue");
+
+    socket.on("queue_joined", (data) => {
+        console.log("Joined queue. Current size:", data.queueSize);
+    });
+
+    socket.on("match_found", (data) => {
+        console.log("Match Found!");
+        window.currentRoomId = data.roomId; // حفظ roomId لاستخدامه لاحقاً
+    });
+
+    socket.on("role_assigned", (data) => {
+        console.log("Your role is:", data.role);
+    });
+
+    socket.on("phase_changed", (data) => {
+        console.log("Phase:", data.phase, "Round:", data.round);
+
+        if (data.phase === "NIGHT") {
+            // للتجربة فقط: المافيا والدكتور يختاران نفس الهدف (أنفسهم)
+            setTimeout(() => {
+                socket.emit("mafia_target", {
+                    roomId: window.currentRoomId,
+                    targetId: socket.id  // يختار نفسه (للتجربة)
+                });
+
+                socket.emit("doctor_save", {
+                    roomId: window.currentRoomId,
+                    targetId: socket.id  // يختار نفسه (للتجربة)
+                });
+            }, 2000);
+        }
+
+        if (data.phase === "DAY") {
+            // للتجربة فقط: كل لاعب يصوت على نفسه
+            setTimeout(() => {
+                socket.emit("vote_player", {
+                    roomId: window.currentRoomId,
+                    targetId: socket.id  // يصوت لنفسه (للتجربة)
+                });
+            }, 2000);
+        }
+    });
+
+    socket.on("player_killed", (data) => {
+        console.log("Player killed during night:", data.username);
+    });
+
+    socket.on("player_eliminated", (data) => {
+        console.log("Player eliminated by vote:", data.username);
+    });
+
+    socket.on("game_over", (data) => {
+        console.log("GAME OVER! Winner:", data.winner);
+    });
+
+    socket.on("disconnect", () => {
+        console.log("Disconnected from server");
+    });
+</script>
+
+</body>
+</html>
