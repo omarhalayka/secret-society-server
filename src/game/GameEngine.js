@@ -40,6 +40,12 @@ class GameEngine {
 
         // تتبع الـ timers المعلقة عشان نلغيها عند reset
         this._pendingTimer = null;
+
+        // ─── سجل الأحداث للـ Stats/Timeline ───
+        this.gameLog = [];          // كل حدث مهم: { round, type, text, icon }
+        this.nightKills = [];       // { round, killed, killedBy, saved }
+        this.votingEliminations = []; // { round, eliminated, tie }
+        this.gameStartTime = null;
     }
 
     // ─── تسجيل مشاهد ───
@@ -90,6 +96,11 @@ class GameEngine {
         // إلغاء أي timer معلق عشان ما يبدأ startNight من جولة قديمة
         if (this._pendingTimer) { clearTimeout(this._pendingTimer); this._pendingTimer = null; }
 
+        this.gameLog = [];
+        this.nightKills = [];
+        this.votingEliminations = [];
+        this.gameStartTime = null;
+
         this.broadcast("back_to_lobby", {});
     }
 
@@ -97,6 +108,10 @@ class GameEngine {
     startGame() {
         this.gameOver = false;
         this.round    = 1;
+        this.gameLog  = [];
+        this.nightKills = [];
+        this.votingEliminations = [];
+        this.gameStartTime = Date.now();
         this.assignRoles();
 
         // بعث game_started لكل لاعب بدوره الجديد
@@ -226,6 +241,21 @@ class GameEngine {
             timestamp: Date.now()
         };
 
+        // ─── سجل في gameLog ───
+        const killedPlayer  = finalVictim  ? this.players.find(p => p.id === finalVictim)  : null;
+        const savedPlayer   = doctorSave   ? this.players.find(p => p.id === doctorSave)   : null;
+        const mafiaPlayer   = mafiaTarget  ? this.players.find(p => p.id === mafiaTarget)  : null;
+
+        if (killedPlayer) {
+            this.nightKills.push({ round: this.round, killed: killedPlayer.username, saved: false });
+            this.gameLog.push({ round: this.round, type: "kill", icon: "🔪", text: `${killedPlayer.username} was eliminated by the Mafia` });
+        } else if (mafiaPlayer && savedPlayer) {
+            this.nightKills.push({ round: this.round, killed: mafiaPlayer.username, saved: true, savedBy: savedPlayer.username });
+            this.gameLog.push({ round: this.round, type: "save", icon: "💊", text: `${mafiaPlayer.username} was targeted but saved by the Doctor` });
+        } else {
+            this.gameLog.push({ round: this.round, type: "quiet", icon: "🌙", text: `Night ${this.round}: No one was eliminated` });
+        }
+
         this.phase = this.PHASES.NIGHT_REVIEW;
         // ✅ FIX: الشات يبقى مفتوح بـ NIGHT_REVIEW
         this.chatEnabled = true;
@@ -345,27 +375,23 @@ class GameEngine {
                 eliminated: victim?.username,
                 tie: false
             });
+            // سجل في gameLog
+            if (victim) {
+                this.votingEliminations.push({ round: this.round, eliminated: victim.username, tie: false });
+                this.gameLog.push({ round: this.round, type: "vote", icon: "🗳️", text: `${victim.username} was voted out by the citizens` });
+            }
         } else {
             this.broadcast("voting_result", {
                 eliminated: null,
                 tie: true
             });
+            // سجل في gameLog
+            this.votingEliminations.push({ round: this.round, eliminated: null, tie: true });
+            this.gameLog.push({ round: this.round, type: "tie", icon: "⚖️", text: `Round ${this.round}: No one was voted out (tie)` });
         }
 
         if (this.checkWinCondition()) return;
-
-        // ✅ انتقل لـ DAY — الأدمن يتحكم في البدء بالليل
-        // أعطِ اللاعبين وقت كافي يشوفوا نتيجة التصويت (4 ثواني)
-        // بعدها انتظر الأدمن يضغط START NIGHT
-        setTimeout(() => {
-            if (this.gameOver) return;
-            this.phase = this.PHASES.DAY;
-            this.chatEnabled = true;
-            this.broadcast("phase_changed", {
-                phase: this.phase,
-                round: this.round
-            });
-        }, 4000);
+        this.startNight();
     }
 
     // ================= WIN CHECK =================
@@ -392,10 +418,25 @@ class GameEngine {
 
         const roles = this.players.map(p => ({
             username: p.username,
-            role:     p.role
+            role:     p.role,
+            avatar:   p.avatar   || "😎",
+            color:    p.color    || "#1e293b",
+            alive:    p.alive
         }));
 
-        this.broadcast("game_over", { winner, roles });
+        const durationMs   = this.gameStartTime ? Date.now() - this.gameStartTime : 0;
+        const durationMins = Math.floor(durationMs / 60000);
+        const durationSecs = Math.floor((durationMs % 60000) / 1000);
+
+        this.broadcast("game_over", {
+            winner,
+            roles,
+            gameLog:            this.gameLog,
+            nightKills:         this.nightKills,
+            votingEliminations: this.votingEliminations,
+            rounds:             this.round,
+            duration:           `${durationMins}m ${durationSecs}s`
+        });
     }
 }
 
