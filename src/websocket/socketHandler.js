@@ -8,11 +8,13 @@ function initializeSocket(io) {
 
         const player = lobbyManager.addPlayer(socket);
 
-        socket.emit("welcome", { message: "Connected to Secret Society", player });
+        socket.emit("welcome", {
+            message: "Connected to Secret Society",
+            player
+        });
 
-        // ─────────────────────────────────────
-        //  USERNAME
-        // ─────────────────────────────────────
+        // ================= USERNAME =================
+
         socket.on("set_username", (username) => {
             if (typeof username !== "string" || username.trim().length < 3) return;
             const clean = username.trim().substring(0, 20);
@@ -20,75 +22,95 @@ function initializeSocket(io) {
             socket.emit("username_updated", updatedPlayer);
         });
 
-        // ─────────────────────────────────────
-        //  JOIN QUEUE
-        // ─────────────────────────────────────
+        // ================= JOIN QUEUE =================
+
         socket.on("join_queue", (data) => {
-            const p = lobbyManager.getPlayer(socket.id);
-            if (!p) return;
+            const player = lobbyManager.getPlayer(socket.id);
+            if (!player) return;
+
             const type = data?.type || "player";
+
+            // ✅ FIX: spectator/admin لا يدخلون الطابور نهائياً
             if (type === "spectator" || type === "admin") return;
+
             socket.data.type = "PLAYER";
             socket.emit("role_type", { type: "PLAYER" });
-            matchmakingManager.addToQueue(p, io);
+            matchmakingManager.addToQueue(player, io);
         });
 
-        // ─────────────────────────────────────
-        //  ADMIN JOIN
-        // ─────────────────────────────────────
+        // ================= ADMIN JOIN =================
+
         socket.on("join_admin", () => {
             socket.data.isAdmin = true;
             socket.data.type    = "ADMIN";
 
+            // ابحث عن غرفة نشطة
             const rooms      = roomManager.getAllRooms();
             const activeRoom = rooms.find(r => r.engine && r.engine.phase !== "GAME_OVER") || rooms[0];
 
             if (!activeRoom) {
+                // ✅ لو ما في غرفة — الأدمن يستنى وبنبلّغه
                 socket.emit("admin_joined");
                 socket.emit("waiting_for_players", { message: "No active room yet. Waiting for players..." });
-                console.log(`Admin ${socket.id} waiting — no active room`);
+                console.log(`Admin ${socket.id} waiting — no active room yet`);
                 return;
             }
 
+            // ✅ نضيف الأدمن للغرفة ونحفظ adminId في الـ engine
             attachToRoom(socket, activeRoom);
-            if (activeRoom.engine) activeRoom.engine.adminId = socket.id;
+            if (activeRoom.engine) {
+                activeRoom.engine.adminId = socket.id;
+            }
             socket.emit("admin_joined");
             console.log(`Admin ${socket.id} joined room ${activeRoom.id}`);
         });
 
-        // ─────────────────────────────────────
-        //  SPECTATOR JOIN
-        // ─────────────────────────────────────
+        // ================= SPECTATOR JOIN =================
+
         socket.on("spectator_join_game", () => {
+            console.log(`Socket ${socket.id} trying to join as spectator`);
             socket.data.type = "SPECTATOR";
 
             const rooms      = roomManager.getAllRooms();
-            const activeRoom = rooms.find(r => r.engine && r.engine.phase !== "GAME_OVER");
+            // ✅ FIX: نقبل أي غرفة حتى لو في LOBBY — عشان يشوف اللعبة من البداية
+            const activeRoom = rooms.find(r =>
+                r.engine && r.engine.phase !== "GAME_OVER"
+            );
 
             if (!activeRoom) {
                 socket.emit("error", { message: "No active game found to spectate" });
+                console.log(`❌ No active game for spectator ${socket.id}`);
                 return;
             }
 
             socket.join(activeRoom.id);
             socket.data.roomId = activeRoom.id;
 
-            if (activeRoom.engine) activeRoom.engine.addSpectator(socket.id);
+            // ✅ نسجّل المشاهد في الـ engine
+            if (activeRoom.engine) {
+                activeRoom.engine.addSpectator(socket.id);
+            }
 
-            socket.emit("game_started", { role: "SPECTATOR", roomId: activeRoom.id });
+            socket.emit("game_started", {
+                role:   "SPECTATOR",
+                roomId: activeRoom.id
+            });
+
             socket.emit("room_state", {
                 players: activeRoom.players,
                 phase:   activeRoom.engine.phase,
                 round:   activeRoom.engine.round
             });
 
-            io.to(activeRoom.id).emit("spectator_joined", { message: "A spectator has joined" });
-            console.log(`Spectator ${socket.id} joined room ${activeRoom.id}`);
+            io.to(activeRoom.id).emit("spectator_joined", {
+                message: "A spectator has joined"
+            });
+
+            console.log(`✅ Spectator ${socket.id} joined room ${activeRoom.id}`);
         });
 
-        // ─────────────────────────────────────
-        //  GAME ACTIONS
-        // ─────────────────────────────────────
+        // ================= GAME ACTIONS =================
+
         socket.on("mafia_kill", (targetId) => {
             const room = roomManager.getRoom(socket.data.roomId);
             if (!room?.engine) return;
@@ -107,19 +129,18 @@ function initializeSocket(io) {
             room.engine.registerDetectiveCheck(socket.id, targetId);
         });
 
-        // ─────────────────────────────────────
-        //  VOTING
-        // ─────────────────────────────────────
+        // ================= VOTING =================
+
         socket.on("vote", (targetId) => {
             const room = roomManager.getRoom(socket.data.roomId);
             if (!room?.engine) return;
+            // ✅ FIX: الأدمن والمشاهد لا يصوّتون — فقط اللاعبين
             if (socket.data.isAdmin || socket.data.type === "SPECTATOR") return;
             room.engine.registerVote(socket.id, targetId);
         });
 
-        // ─────────────────────────────────────
-        //  ADMIN CONTROLS
-        // ─────────────────────────────────────
+        // ================= ADMIN CONTROLS =================
+
         socket.on("admin_start_night", () => {
             if (!socket.data.isAdmin) return;
             const room = roomManager.getRoom(socket.data.roomId);
@@ -134,40 +155,22 @@ function initializeSocket(io) {
             room.engine.endNight();
         });
 
-        // ─────────────────────────────────────
-        //  ADMIN REVEAL NIGHT RESULTS
-        //  FIX: نحفظ النتائج قبل executeNightResults يمسحها
-        //  FIX: نبعث night_results_revealed للاعبين (MAFIA/DOCTOR/DETECTIVE)
-        // ─────────────────────────────────────
+        // ================= ADMIN REVEAL NIGHT RESULTS =================
+
         socket.on("admin_reveal_night_results", (storyText) => {
             if (!socket.data.isAdmin) return;
             const room = roomManager.getRoom(socket.data.roomId);
             if (!room?.engine) return;
 
-            console.log("Admin revealing night results, story:", storyText);
+            console.log("Admin revealing night results:", storyText);
 
-            // FIX: executeNightResults ترجع النتائج المحفوظة قبل التنظيف
-            const results = room.engine.executeNightResults();
+            room.engine.executeNightResults();
 
-            // بعث النتائج للمافيا/دكتور/محقق
-            room.engine.players.forEach(p => {
-                if (["MAFIA", "DOCTOR", "DETECTIVE"].includes(p.role)) {
-                    io.to(p.id).emit("night_review", {
-                        mafiaTarget:     results.mafiaTarget,
-                        doctorSave:      results.doctorSave,
-                        detectiveChecks: results.detectiveChecks,
-                        finalVictim:     results.finalVictim,
-                    });
-                }
-            });
-
-            // القصة لكل الغرفة
             io.to(room.id).emit("night_story", {
-                story:  storyText || "The night passed in silence...",
-                victim: results.finalVictim
+                story:  storyText || "The night has passed in silence...",
+                victim: room.engine.nightResults?.finalVictim || null
             });
 
-            // الانتقال للنهار
             room.engine.startDay();
         });
 
@@ -185,6 +188,7 @@ function initializeSocket(io) {
             room.engine.endVoting();
         });
 
+        // ✅ FIX: admin_end_game يُنهي اللعبة قسراً بدل checkWinCondition
         socket.on("admin_end_game", () => {
             if (!socket.data.isAdmin) return;
             const room = roomManager.getRoom(socket.data.roomId);
@@ -192,10 +196,8 @@ function initializeSocket(io) {
             room.engine.endGame("ADMIN_FORCED");
         });
 
-        // ─────────────────────────────────────
-        //  RESTART GAME
-        //  FIX: نمسح room_state الزائدة — startGame() يبعثها مرة واحدة كافية
-        // ─────────────────────────────────────
+        // ================= RESTART GAME =================
+
         socket.on("restart_game", () => {
             if (!socket.data.isAdmin) return;
             const room = roomManager.getRoom(socket.data.roomId);
@@ -204,48 +206,73 @@ function initializeSocket(io) {
             console.log(`Admin restarting game in room ${room.id}`);
             room.engine.resetGame();
 
-            // delay 1 ثانية — وقت للـ client يعالج back_to_lobby ويرجع للـ GameScene
+            // ✅ FIX: delay صغير قبل startGame عشان الـ clients يعالجوا back_to_lobby
             setTimeout(() => {
                 room.engine.startGame();
-                // startGame() يبعث game_started + room_state للكل — لا نحتاج نبعث مرة ثانية
-            }, 1000);
+
+                // ✅ FIX: نبعث room_state للكل بعد توزيع الأدوار
+                io.to(room.id).emit("room_state", {
+                    players: room.players,
+                    phase:   room.engine.phase,
+                    round:   room.engine.round
+                });
+            }, 800);
         });
 
-        // ─────────────────────────────────────
-        //  STATE REQUEST
-        // ─────────────────────────────────────
+        // ================= STATE REQUEST =================
+
         socket.on("request_room_state", () => {
             const room = roomManager.getRoom(socket.data.roomId);
             if (!room?.engine) return;
 
+            // فلترة الأدوار: كل لاعب يشوف دوره فقط، التانيين بدون role
+            const filteredPlayers = room.players.map(p => ({
+                id:       p.id,
+                username: p.username,
+                alive:    p.alive,
+                userType: p.userType,
+                role: (p.id === socket.id || !p.alive || socket.data.isAdmin || socket.data.type === "SPECTATOR") ? p.role : null,
+            }));
+            // المافيا يشوف زملاءه
+            const myPlayer = room.players.find(p => p.id === socket.id);
+            if (myPlayer?.role === "MAFIA") {
+                filteredPlayers.forEach(fp => {
+                    const orig = room.players.find(p => p.id === fp.id);
+                    if (orig?.role === "MAFIA") fp.role = "MAFIA";
+                });
+            }
             socket.emit("room_state", {
-                players: room.players,
+                players: filteredPlayers,
                 phase:   room.engine.phase,
                 round:   room.engine.round
             });
         });
 
-        // ─────────────────────────────────────
-        //  QUEUE STATUS
-        // ─────────────────────────────────────
+        // ================= QUEUE STATUS =================
+
+        // ✅ FIX: handler مفقود — LobbyScene تطلبه كل 3 ثواني
         socket.on("request_queue_status", () => {
             socket.emit("queue_update", {
                 queueSize: matchmakingManager.getQueueSize()
             });
         });
 
-        // ─────────────────────────────────────
-        //  CHAT — مفتوح للكل دائماً
-        //  الأدمن، اللاعبون (أحياء وأموات)، المشاهدون
-        // ─────────────────────────────────────
+        // ================= CHAT MESSAGE =================
+
         socket.on("send_message", (message) => {
             if (typeof message !== "string" || message.trim().length === 0) return;
 
             const room = roomManager.getRoom(socket.data.roomId);
             if (!room?.engine) return;
 
+            // ✅ FIX: الشات مفتوح دائماً للكل — أدمن، لاعبين، مشاهدين
+            // chatEnabled دائماً true في الـ engine الجديد
+            // لكن نتحقق منه للأمان
+            if (!room.engine.chatEnabled) return;
+
             const clean = message.trim().substring(0, 200);
 
+            // ✅ FIX: الأدمن والمشاهد كمان يقدروا يحكوا
             let senderUsername = null;
             let senderAlive    = true;
 
@@ -256,10 +283,10 @@ function initializeSocket(io) {
                 senderUsername = "SPECTATOR 👁";
                 senderAlive    = true;
             } else {
-                const p = room.players.find(pl => pl.id === socket.id);
-                if (!p) return;
-                senderUsername = p.username;
-                senderAlive    = p.alive;
+                const player = room.players.find(p => p.id === socket.id);
+                if (!player) return;
+                senderUsername = player.username;
+                senderAlive    = player.alive;
             }
 
             io.to(room.id).emit("receive_message", {
@@ -269,32 +296,38 @@ function initializeSocket(io) {
             });
         });
 
-        // ─────────────────────────────────────
-        //  DISCONNECT
-        // ─────────────────────────────────────
+        // ================= DISCONNECT =================
+
         socket.on("disconnect", () => {
+            // ✅ نشيل المشاهد من الـ engine لو كان مشاهداً
             if (socket.data.type === "SPECTATOR" && socket.data.roomId) {
                 const room = roomManager.getRoom(socket.data.roomId);
                 if (room?.engine) room.engine.removeSpectator(socket.id);
             }
+
             lobbyManager.removePlayer(socket.id);
             matchmakingManager.removeFromQueue(socket.id);
         });
 
     });
 
-    // ─── helper: ربط الأدمن/المشاهد بغرفة موجودة ───
+    // ================= ATTACH TO ROOM =================
+
     function attachToRoom(socket, room) {
         socket.join(room.id);
         socket.data.roomId = room.id;
 
         const role = socket.data.isAdmin ? "ADMIN" : "SPECTATOR";
 
-        socket.emit("game_started", { roomId: room.id, role });
+        socket.emit("game_started", {
+            roomId: room.id,
+            role
+        });
+
         socket.emit("room_state", {
             players: room.players,
-            phase:   room.engine?.phase || "LOBBY",
-            round:   room.engine?.round || 1
+            phase:   room.engine?.phase  || "LOBBY",
+            round:   room.engine?.round  || 1
         });
     }
 }
