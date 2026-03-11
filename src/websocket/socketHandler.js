@@ -22,26 +22,6 @@ function initializeSocket(io) {
             socket.emit("username_updated", updatedPlayer);
         });
 
-        // ─── Avatar ───
-        socket.on("set_avatar", (avatar) => {
-            const allowed = ["😎","🦊","🐺","🦁","🐻","🦝","🐸","👻","🤖","💀","🧙","🕵️","🎭","🃏","🦅"];
-            if (!allowed.includes(avatar)) return;
-            const player = lobbyManager.getPlayer(socket.id);
-            if (player) player.avatar = avatar;
-        });
-
-        // ✅ set_color: اللاعب يختار لون لـ avatar background
-        socket.on("set_color", (color) => {
-            const allowedColors = [
-                "#1e293b","#7f1d1d","#14532d","#1e3a5f",
-                "#4a1d96","#78350f","#134e4a","#1f2937",
-                "#831843","#365314","#1e1b4b","#451a03"
-            ];
-            if (!allowedColors.includes(color)) return;
-            const player = lobbyManager.getPlayer(socket.id);
-            if (player) player.color = color;
-        });
-
         // ================= JOIN QUEUE =================
 
         socket.on("join_queue", (data) => {
@@ -245,8 +225,24 @@ function initializeSocket(io) {
             const room = roomManager.getRoom(socket.data.roomId);
             if (!room?.engine) return;
 
+            // فلترة الأدوار: كل لاعب يشوف دوره فقط، التانيين بدون role
+            const filteredPlayers = room.players.map(p => ({
+                id:       p.id,
+                username: p.username,
+                alive:    p.alive,
+                userType: p.userType,
+                role: (p.id === socket.id || !p.alive || socket.data.isAdmin || socket.data.type === "SPECTATOR") ? p.role : null,
+            }));
+            // المافيا يشوف زملاءه
+            const myPlayer = room.players.find(p => p.id === socket.id);
+            if (myPlayer?.role === "MAFIA") {
+                filteredPlayers.forEach(fp => {
+                    const orig = room.players.find(p => p.id === fp.id);
+                    if (orig?.role === "MAFIA") fp.role = "MAFIA";
+                });
+            }
             socket.emit("room_state", {
-                players: room.players,
+                players: filteredPlayers,
                 phase:   room.engine.phase,
                 round:   room.engine.round
             });
