@@ -27,6 +27,13 @@ class GameEngine {
             detectiveChecks: []
         };
 
+        // تتبع مين خلّص اختياره بالليل — للأدمن فقط
+        this.nightActionStatus = {
+            mafia:     { done: false, username: null },
+            doctor:    { done: false, username: null },
+            detective: { done: false, username: null },
+        };
+
         this.nightResults = {
             mafiaTarget:    null,
             doctorSave:     null,
@@ -74,6 +81,12 @@ class GameEngine {
             mafiaTarget:    null,
             doctorSave:     null,
             detectiveChecks: []
+        };
+
+        this.nightActionStatus = {
+            mafia:     { done: false, username: null },
+            doctor:    { done: false, username: null },
+            detective: { done: false, username: null },
         };
 
         this.nightResults = {
@@ -158,6 +171,12 @@ class GameEngine {
             doctorSave:     null,
             detectiveChecks: []
         };
+        // reset حالة الاختيارات
+        this.nightActionStatus = {
+            mafia:     { done: false, username: null },
+            doctor:    { done: false, username: null },
+            detective: { done: false, username: null },
+        };
         // ✅ FIX: الشات يبقى مفتوح بالليل أيضاً
         this.chatEnabled = true;
 
@@ -173,6 +192,10 @@ class GameEngine {
         if (this.phase !== this.PHASES.NIGHT) return;
         this.nightActions.mafiaTarget = targetId;
         console.log(`  Mafia targeted: ${targetId}`);
+
+        // أبلغ الأدمن إن المافيا خلّصت
+        this.nightActionStatus.mafia = { done: true, username: player.username };
+        this._sendNightStatusToAdmin();
     }
 
     registerDoctorSave(playerId, targetId) {
@@ -181,6 +204,10 @@ class GameEngine {
         if (this.phase !== this.PHASES.NIGHT) return;
         this.nightActions.doctorSave = targetId;
         console.log(`  Doctor saved: ${targetId}`);
+
+        // أبلغ الأدمن إن الدكتور خلّص
+        this.nightActionStatus.doctor = { done: true, username: player.username };
+        this._sendNightStatusToAdmin();
     }
 
     registerDetectiveCheck(playerId, targetId) {
@@ -207,6 +234,16 @@ class GameEngine {
         });
 
         console.log(`  Detective checked ${target.username} -> ${result}`);
+
+        // أبلغ الأدمن إن المحقق خلّص
+        this.nightActionStatus.detective = { done: true, username: player.username };
+        this._sendNightStatusToAdmin();
+    }
+
+    // ─── helper: بعث حالة اختيارات الليل للأدمن فقط ───
+    _sendNightStatusToAdmin() {
+        if (!this.adminId) return;
+        this.io.to(this.adminId).emit("night_action_status", this.nightActionStatus);
     }
 
     endNight() {
@@ -227,21 +264,13 @@ class GameEngine {
         };
 
         this.phase = this.PHASES.NIGHT_REVIEW;
-        // ✅ FIX: الشات يبقى مفتوح بـ NIGHT_REVIEW
         this.chatEnabled = true;
 
-        // نتائج الليل للأدمن
+        // نتائج الليل للأدمن فقط — المافيا/دكتور/محقق ما يشوفوا النتائج
         if (this.adminId) {
             console.log("Sending night review to admin:", this.nightResults);
             this.io.to(this.adminId).emit("night_review", this.nightResults);
         }
-
-        // ✅ FIX: نبعث night_review للمافيا/دكتور/محقق أيضاً عشان يشوفوا overlay
-        this.players.forEach(p => {
-            if (["MAFIA", "DOCTOR", "DETECTIVE"].includes(p.role) && p.alive) {
-                this.io.to(p.id).emit("night_review", this.nightResults);
-            }
-        });
 
         this.broadcast("phase_changed", {
             phase:   this.phase,
