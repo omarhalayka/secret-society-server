@@ -16,6 +16,9 @@ function initializeSocket(io) {
             player
         });
 
+        // ─── أبلغ الـ client بحالة كلمة السر الحالية فوراً ───
+        socket.emit("session_password_ready", { ready: !!sessionPassword });
+
         // ================= USERNAME =================
 
         socket.on("set_username", (username) => {
@@ -83,6 +86,7 @@ function initializeSocket(io) {
                 sessionPassword = null;
                 console.log("Session password cleared — open session");
                 socket.emit("session_password_set", { password: null });
+                io.emit("session_password_ready", { ready: false });
                 return;
             }
             if (pw.length < 2) {
@@ -92,6 +96,8 @@ function initializeSocket(io) {
             sessionPassword = pw;
             console.log(`Session password set: ${sessionPassword}`);
             socket.emit("session_password_set", { password: sessionPassword });
+            // أبلغ كل الـ clients إن كلمة السر جاهزة
+            io.emit("session_password_ready", { ready: true });
         });
 
         // ================= SPECTATOR JOIN =================
