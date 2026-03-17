@@ -100,7 +100,16 @@ function initializeSocket(io) {
             io.emit("session_password_ready", { ready: true });
         });
 
-        // ================= SPECTATOR JOIN =================
+        // ================= VERIFY SESSION PASSWORD =================
+
+        socket.on("verify_session_password", (data) => {
+            const pw = typeof data?.password === "string" ? data.password.trim() : "";
+            if (sessionPassword && pw === sessionPassword) {
+                socket.emit("password_verify_ok");
+            } else {
+                socket.emit("password_verify_fail");
+            }
+        });
 
         socket.on("spectator_join_game", () => {
             console.log(`Socket ${socket.id} trying to join as spectator`);
