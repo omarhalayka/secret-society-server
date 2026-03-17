@@ -2,6 +2,9 @@ const lobbyManager       = require("../core/lobbyManager");
 const matchmakingManager = require("../core/matchmakingManager");
 const roomManager        = require("../core/roomManager");
 
+// ─── كلمة سر الجلسة الحالية — يحددها الأدمن كل مرة ───
+let sessionPassword = null;
+
 function initializeSocket(io) {
 
     io.on("connection", (socket) => {
@@ -28,10 +31,17 @@ function initializeSocket(io) {
             const player = lobbyManager.getPlayer(socket.id);
             if (!player) return;
 
-            const type = data?.type || "player";
+            const type     = data?.type || "player";
+            const password = data?.password || "";
 
-            // ✅ FIX: spectator/admin لا يدخلون الطابور نهائياً
+            // spectator/admin لا يدخلون الطابور
             if (type === "spectator" || type === "admin") return;
+
+            // ─── التحقق من كلمة السر للاعبين فقط ───
+            if (sessionPassword && password !== sessionPassword) {
+                socket.emit("error", { message: "كلمة السر غلط ❌" });
+                return;
+            }
 
             socket.data.type = "PLAYER";
             socket.emit("role_type", { type: "PLAYER" });
@@ -49,20 +59,32 @@ function initializeSocket(io) {
             const activeRoom = rooms.find(r => r.engine && r.engine.phase !== "GAME_OVER") || rooms[0];
 
             if (!activeRoom) {
-                // ✅ لو ما في غرفة — الأدمن يستنى وبنبلّغه
                 socket.emit("admin_joined");
                 socket.emit("waiting_for_players", { message: "No active room yet. Waiting for players..." });
                 console.log(`Admin ${socket.id} waiting — no active room yet`);
                 return;
             }
 
-            // ✅ نضيف الأدمن للغرفة ونحفظ adminId في الـ engine
             attachToRoom(socket, activeRoom);
             if (activeRoom.engine) {
                 activeRoom.engine.adminId = socket.id;
             }
             socket.emit("admin_joined");
             console.log(`Admin ${socket.id} joined room ${activeRoom.id}`);
+        });
+
+        // ================= SET SESSION PASSWORD =================
+
+        socket.on("set_session_password", (data) => {
+            if (!socket.data.isAdmin) return;
+            const pw = data?.password?.trim();
+            if (!pw || pw.length < 2) {
+                socket.emit("error", { message: "كلمة السر قصيرة جداً" });
+                return;
+            }
+            sessionPassword = pw;
+            console.log(`Session password set: ${sessionPassword}`);
+            socket.emit("session_password_set", { password: sessionPassword });
         });
 
         // ================= SPECTATOR JOIN =================
@@ -226,13 +248,12 @@ function initializeSocket(io) {
             if (!room?.engine) return;
 
             // فلترة الأدوار: كل لاعب يشوف دوره فقط، التانيين بدون role
-            // الميت يبقى مخفي دوره حتى نهاية اللعبة — الأدمن والمشاهد بس يشوفوا الكل
             const filteredPlayers = room.players.map(p => ({
                 id:       p.id,
                 username: p.username,
                 alive:    p.alive,
                 userType: p.userType,
-                role: (p.id === socket.id || socket.data.isAdmin || socket.data.type === "SPECTATOR") ? p.role : null,
+                role: (p.id === socket.id || !p.alive || socket.data.isAdmin || socket.data.type === "SPECTATOR") ? p.role : null,
             }));
             // المافيا يشوف زملاءه
             const myPlayer = room.players.find(p => p.id === socket.id);
