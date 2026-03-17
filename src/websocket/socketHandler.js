@@ -93,10 +93,27 @@ function initializeSocket(io) {
                 socket.emit("error", { message: "كلمة السر قصيرة جداً" });
                 return;
             }
+
             sessionPassword = pw;
             console.log(`Session password set: ${sessionPassword}`);
             socket.emit("session_password_set", { password: sessionPassword });
-            // أبلغ كل الـ clients إن كلمة السر جاهزة
+
+            // ─── اطرد كل اللاعبين من الـ queue ───
+            const ejected = matchmakingManager.getQueueSize();
+            if (ejected > 0) {
+                // نأخذ نسخة من الـ queue قبل ما نفضيها
+                const queuedIds = matchmakingManager.queue.map(p => p.id);
+                queuedIds.forEach(id => {
+                    matchmakingManager.removeFromQueue(id);
+                    const s = io.sockets.sockets.get(id);
+                    if (s) {
+                        s.emit("session_reset", { message: "تم تغيير كلمة السر — أدخل الكلمة الجديدة للانضمام" });
+                    }
+                });
+                console.log(`Ejected ${ejected} players from queue due to password change`);
+            }
+
+            // أبلغ كل الـ clients إن كلمة السر تغيرت
             io.emit("session_password_ready", { ready: true });
         });
 
