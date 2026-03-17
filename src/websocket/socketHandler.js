@@ -38,6 +38,7 @@ function initializeSocket(io) {
             if (type === "spectator" || type === "admin") return;
 
             // ─── التحقق من كلمة السر للاعبين فقط ───
+            console.log(`Join attempt — sessionPassword: "${sessionPassword}", provided: "${password}"`);
             if (sessionPassword && password !== sessionPassword) {
                 socket.emit("error", { message: "كلمة السر غلط ❌" });
                 return;
