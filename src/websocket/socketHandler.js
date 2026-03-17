@@ -76,9 +76,15 @@ function initializeSocket(io) {
         // ================= SET SESSION PASSWORD =================
 
         socket.on("set_session_password", (data) => {
-            if (!socket.data.isAdmin) return;
-            const pw = data?.password?.trim();
-            if (!pw || pw.length < 2) {
+            const pw = typeof data?.password === "string" ? data.password.trim() : "";
+            // كلمة سر فارغة = بدون كلمة سر (open session)
+            if (!pw) {
+                sessionPassword = null;
+                console.log("Session password cleared — open session");
+                socket.emit("session_password_set", { password: null });
+                return;
+            }
+            if (pw.length < 2) {
                 socket.emit("error", { message: "كلمة السر قصيرة جداً" });
                 return;
             }
