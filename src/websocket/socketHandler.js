@@ -360,7 +360,7 @@ function initializeSocket(io) {
         // ================= DISCONNECT =================
 
         socket.on("disconnect", () => {
-            // ✅ نشيل المشاهد من الـ engine لو كان مشاهداً
+            // نشيل المشاهد من الـ engine لو كان مشاهداً
             if (socket.data.type === "SPECTATOR" && socket.data.roomId) {
                 const room = roomManager.getRoom(socket.data.roomId);
                 if (room?.engine) room.engine.removeSpectator(socket.id);
@@ -368,6 +368,28 @@ function initializeSocket(io) {
 
             lobbyManager.removePlayer(socket.id);
             matchmakingManager.removeFromQueue(socket.id);
+
+            // ─── نشيل اللاعب من الغرفة لو كان فيها ───
+            if (socket.data.roomId) {
+                const room = roomManager.getRoom(socket.data.roomId);
+                if (room) {
+                    // نحذف اللاعب من قائمة الغرفة
+                    room.players = room.players.filter(p => p.id !== socket.id);
+                    console.log(`Player ${socket.id} removed from room ${socket.data.roomId}`);
+
+                    // لو الغرفة فاضية تماماً — نحذفها
+                    const activeSockets = room.players.filter(p => {
+                        return io.sockets.sockets.has(p.id);
+                    });
+                    if (activeSockets.length === 0) {
+                        roomManager.removeRoom(socket.data.roomId);
+                        // reset كلمة السر لما الجلسة تنتهي
+                        sessionPassword = null;
+                        io.emit("session_password_ready", { ready: false });
+                        console.log(`Room ${socket.data.roomId} removed — session reset`);
+                    }
+                }
+            }
         });
 
     });
