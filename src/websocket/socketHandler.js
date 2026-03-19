@@ -267,17 +267,47 @@ function initializeSocket(io) {
             console.log(`Admin restarting game in room ${room.id}`);
             room.engine.resetGame();
 
-            // ✅ FIX: delay صغير قبل startGame عشان الـ clients يعالجوا back_to_lobby
             setTimeout(() => {
                 room.engine.startGame();
-
-                // ✅ FIX: نبعث room_state للكل بعد توزيع الأدوار
                 io.to(room.id).emit("room_state", {
                     players: room.players,
                     phase:   room.engine.phase,
                     round:   room.engine.round
                 });
             }, 800);
+        });
+
+        // ================= RESET SERVER =================
+
+        socket.on("admin_reset_server", () => {
+            if (!socket.data.isAdmin) return;
+            console.log("🔴 Admin triggered full server reset");
+
+            // ─── امسح كل الغرف ───
+            const allRooms = roomManager.getAllRooms();
+            allRooms.forEach(room => {
+                if (room.engine) {
+                    if (room.engine._pendingTimer) {
+                        clearTimeout(room.engine._pendingTimer);
+                    }
+                }
+                roomManager.removeRoom(room.id);
+            });
+
+            // ─── امسح الـ queue ───
+            matchmakingManager.queue = [];
+
+            // ─── امسح كل اللاعبين من الـ lobbyManager ───
+            lobbyManager.players.clear();
+
+            // ─── امسح كلمة السر ───
+            sessionPassword = null;
+
+            // ─── أبلغ كل الـ clients يرجعوا للـ lobby ───
+            io.emit("server_reset", { message: "Server has been reset by admin" });
+            io.emit("session_password_ready", { ready: false });
+
+            console.log("✅ Server reset complete");
         });
 
         // ================= STATE REQUEST =================
