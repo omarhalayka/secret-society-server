@@ -225,7 +225,7 @@ class GameEngine {
         const target = this.players.find(p => p.id === targetId);
         if (!target) return;
 
-        const result = target.role === "MAFIA" ? "MAFIA" : "NOT MAFIA";
+        const result = target.role; // نبعث الدور الحقيقي: MAFIA / DOCTOR / CITIZEN / DETECTIVE
 
         this.nightActions.detectiveChecks.push({
             detectiveId: playerId, targetId,
