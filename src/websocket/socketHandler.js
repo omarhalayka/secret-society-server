@@ -357,13 +357,13 @@ function initializeSocket(io) {
             const room = roomManager.getRoom(socket.data.roomId);
             if (!room?.engine) return;
 
-            // فلترة الأدوار: كل لاعب يشوف دوره فقط، التانيين بدون role
+            // فلترة الأدوار: كل لاعب يشوف دوره فقط — الميت دوره مخفي حتى نهاية اللعبة
             const filteredPlayers = room.players.map(p => ({
                 id:       p.id,
                 username: p.username,
                 alive:    p.alive,
                 userType: p.userType,
-                role: (p.id === socket.id || !p.alive || socket.data.isAdmin || socket.data.type === "SPECTATOR") ? p.role : null,
+                role: (p.id === socket.id || socket.data.isAdmin || socket.data.type === "SPECTATOR") ? p.role : null,
             }));
             // المافيا يشوف زملاءه
             const myPlayer = room.players.find(p => p.id === socket.id);
