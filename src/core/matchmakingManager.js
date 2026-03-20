@@ -3,7 +3,15 @@ const roomManager = require("./roomManager");
 class MatchmakingManager {
     constructor() {
         this.queue = [];
-        this.requiredPlayers = 6;
+        this.requiredPlayers = 6; // القيمة الافتراضية
+    }
+
+    setRequiredPlayers(count) {
+        const n = parseInt(count);
+        if (n >= 4 && n <= 12) {
+            this.requiredPlayers = n;
+            console.log(`Required players set to: ${this.requiredPlayers}`);
+        }
     }
 
     addToQueue(player, io) {

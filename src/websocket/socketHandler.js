@@ -1,3 +1,4 @@
+// @ts-nocheck
 const lobbyManager       = require("../core/lobbyManager");
 const matchmakingManager = require("../core/matchmakingManager");
 const roomManager        = require("../core/roomManager");
@@ -126,6 +127,29 @@ function initializeSocket(io) {
             } else {
                 socket.emit("password_verify_fail");
             }
+        });
+
+        // ================= SET PLAYER COUNT =================
+
+        socket.on("set_player_count", (data) => {
+            const count = parseInt(data?.count);
+            if (isNaN(count) || count < 4 || count > 12) return;
+
+            // فضّي الـ queue لو في أحد
+            if (matchmakingManager.getQueueSize() > 0) {
+                const queuedIds = matchmakingManager.queue.map(p => p.id);
+                queuedIds.forEach(id => {
+                    matchmakingManager.removeFromQueue(id);
+                    const s = io.sockets.sockets.get(id);
+                    if (s) s.emit("session_reset", { message: "تم تغيير عدد اللاعبين — انضم من جديد" });
+                });
+            }
+
+            matchmakingManager.setRequiredPlayers(count);
+            console.log(`Player count set to ${count}`);
+
+            // أبلغ كل الـ clients بالعدد الجديد
+            io.emit("player_count_updated", { required: count });
         });
 
         socket.on("spectator_join_game", () => {
@@ -283,13 +307,11 @@ function initializeSocket(io) {
             if (!socket.data.isAdmin) return;
             console.log("🔴 Admin triggered full server reset");
 
-            // ─── امسح كل الغرف ───
+            // ─── امسح كل الغرف وأوقف الـ timers ───
             const allRooms = roomManager.getAllRooms();
             allRooms.forEach(room => {
-                if (room.engine) {
-                    if (room.engine._pendingTimer) {
-                        clearTimeout(room.engine._pendingTimer);
-                    }
+                if (room.engine?._pendingTimer) {
+                    clearTimeout(room.engine._pendingTimer);
                 }
                 roomManager.removeRoom(room.id);
             });
@@ -297,14 +319,33 @@ function initializeSocket(io) {
             // ─── امسح الـ queue ───
             matchmakingManager.queue = [];
 
-            // ─── امسح كل اللاعبين من الـ lobbyManager ───
-            lobbyManager.players.clear();
-
             // ─── امسح كلمة السر ───
             sessionPassword = null;
 
-            // ─── أبلغ كل الـ clients يرجعوا للـ lobby ───
-            io.emit("server_reset", { message: "Server has been reset by admin" });
+            // ─── امسح بيانات كل الـ sockets ما عدا الأدمن ───
+            io.sockets.sockets.forEach((s) => {
+                if (s.id === socket.id) return; // الأدمن يضل
+                // امسح بياناته
+                s.data.roomId  = null;
+                s.data.type    = null;
+                s.data.isAdmin = false;
+                // اشيله من أي socket room
+                s.rooms.forEach(room => {
+                    if (room !== s.id) s.leave(room);
+                });
+                // سجّله من جديد في الـ lobbyManager بدون دور
+                const p = lobbyManager.getPlayer(s.id);
+                if (p) {
+                    p.role    = null;
+                    p.roomId  = null;
+                }
+            });
+
+            // ─── امسح بيانات الأدمن نفسه ───
+            socket.data.roomId = null;
+
+            // ─── أبلغ كل الـ clients ───
+            io.emit("server_reset", {});
             io.emit("session_password_ready", { ready: false });
 
             console.log("✅ Server reset complete");
@@ -344,7 +385,8 @@ function initializeSocket(io) {
         // ✅ FIX: handler مفقود — LobbyScene تطلبه كل 3 ثواني
         socket.on("request_queue_status", () => {
             socket.emit("queue_update", {
-                queueSize: matchmakingManager.getQueueSize()
+                queueSize: matchmakingManager.getQueueSize(),
+                required:  matchmakingManager.requiredPlayers
             });
         });
 
