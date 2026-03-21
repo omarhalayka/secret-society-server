@@ -3,8 +3,11 @@ const lobbyManager       = require("../core/lobbyManager");
 const matchmakingManager = require("../core/matchmakingManager");
 const roomManager        = require("../core/roomManager");
 
-// ─── كلمة سر الجلسة الحالية — يحددها الأدمن كل مرة ───
+// ─── كلمة سر الجلسة الحالية ───
 let sessionPassword = null;
+
+// ─── كودات الرجوع — { code: { username, roomId, role, expires } } ───
+const rejoinCodes = {};
 
 function initializeSocket(io) {
 
@@ -51,6 +54,112 @@ function initializeSocket(io) {
             socket.data.type = "PLAYER";
             socket.emit("role_type", { type: "PLAYER" });
             matchmakingManager.addToQueue(player, io);
+        });
+
+        // ================= ADMIN ADD PLAYER =================
+
+        socket.on("admin_add_player", (data) => {
+            if (!socket.data.isAdmin) return;
+            const { username } = data || {};
+            if (!username?.trim()) return;
+
+            const room = roomManager.getRoom(socket.data.roomId);
+            if (!room?.engine) return;
+
+            // تحقق إن اللاعب موجود في الغرفة
+            const existingPlayer = room.players.find(
+                p => p.username.toLowerCase() === username.trim().toLowerCase()
+            );
+            if (!existingPlayer) {
+                socket.emit("admin_add_player_error", { message: `"${username}" غير موجود في الغرفة` });
+                return;
+            }
+
+            // ولّد كود رجوع عشوائي 6 أرقام
+            const code = Math.floor(100000 + Math.random() * 900000).toString();
+            rejoinCodes[code] = {
+                username:  existingPlayer.username,
+                roomId:    room.id,
+                role:      existingPlayer.role,
+                expires:   Date.now() + 10 * 60 * 1000, // 10 دقائق
+            };
+
+            console.log(`✅ Rejoin code ${code} generated for ${existingPlayer.username}`);
+
+            // ابعث الكود للأدمن
+            socket.emit("rejoin_code_generated", {
+                code,
+                username: existingPlayer.username,
+                role:     existingPlayer.role,
+            });
+        });
+
+        // ================= REJOIN WITH CODE =================
+
+        socket.on("rejoin_with_code", (data) => {
+            const { code, username } = data || {};
+            if (!code || !username) return;
+
+            const entry = rejoinCodes[code];
+
+            // تحقق من الكود
+            if (!entry) {
+                socket.emit("rejoin_code_error", { message: "كود غلط ❌" });
+                return;
+            }
+            if (Date.now() > entry.expires) {
+                delete rejoinCodes[code];
+                socket.emit("rejoin_code_error", { message: "الكود انتهت صلاحيته" });
+                return;
+            }
+            if (entry.username.toLowerCase() !== username.trim().toLowerCase()) {
+                socket.emit("rejoin_code_error", { message: "الاسم غير متطابق ❌" });
+                return;
+            }
+
+            const room = roomManager.getRoom(entry.roomId);
+            if (!room?.engine || room.engine.phase === "GAME_OVER") {
+                delete rejoinCodes[code];
+                socket.emit("rejoin_code_error", { message: "الجلسة انتهت" });
+                return;
+            }
+
+            // حدّث اللاعب في الغرفة
+            const player = room.players.find(p => p.username === entry.username);
+            if (!player) {
+                socket.emit("rejoin_code_error", { message: "اللاعب غير موجود في الغرفة" });
+                return;
+            }
+
+            player.id          = socket.id;
+            socket.data.roomId = entry.roomId;
+            socket.data.type   = "PLAYER";
+            socket.join(entry.roomId);
+            delete rejoinCodes[code]; // الكود يُستخدم مرة واحدة بس
+
+            // فلترة الأدوار
+            const filteredPlayers = room.players.map(p => ({
+                id:       p.id,
+                username: p.username,
+                alive:    p.alive,
+                userType: p.userType,
+                role:     p.id === socket.id ? p.role : null,
+            }));
+            if (player.role === "MAFIA") {
+                filteredPlayers.forEach(fp => {
+                    const orig = room.players.find(p => p.id === fp.id);
+                    if (orig?.role === "MAFIA") fp.role = "MAFIA";
+                });
+            }
+
+            socket.emit("game_started", { roomId: entry.roomId, role: player.role });
+            socket.emit("room_state", {
+                players: filteredPlayers,
+                phase:   room.engine.phase,
+                round:   room.engine.round,
+            });
+
+            console.log(`✅ ${entry.username} rejoined via code`);
         });
 
         // ================= REJOIN GAME =================
