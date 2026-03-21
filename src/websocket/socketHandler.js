@@ -202,6 +202,29 @@ function initializeSocket(io) {
             room.engine.registerMafiaKill(socket.id, targetId);
         });
 
+        // ─── محادثة المافيا السرية (ليل فقط) ───
+        socket.on("mafia_chat", (message) => {
+            if (typeof message !== "string" || !message.trim()) return;
+            const room = roomManager.getRoom(socket.data.roomId);
+            if (!room?.engine) return;
+            if (room.engine.phase !== "NIGHT") return;
+
+            const player = room.players.find(p => p.id === socket.id);
+            if (!player || player.role !== "MAFIA" || !player.alive) return;
+
+            const clean = message.trim().substring(0, 200);
+            // نبعث الرسالة لكل المافيا الأحياء فقط
+            room.players.forEach(p => {
+                if (p.role === "MAFIA" && p.alive) {
+                    const s = room.engine.io.to(p.id);
+                    s.emit("mafia_chat_message", {
+                        from:    player.username,
+                        message: clean,
+                    });
+                }
+            });
+        });
+
         socket.on("doctor_save", (targetId) => {
             const room = roomManager.getRoom(socket.data.roomId);
             if (!room?.engine) return;

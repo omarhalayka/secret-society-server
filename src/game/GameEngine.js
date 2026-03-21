@@ -196,11 +196,25 @@ class GameEngine {
         const player = this.players.find(p => p.id === playerId);
         if (!player || player.role !== "MAFIA" || !player.alive) return;
         if (this.phase !== this.PHASES.NIGHT) return;
-        // لو في مافيا ثانية اختارت قبل — نتجاهل
-        if (this.nightActions.mafiaTarget) return;
 
+        // ─── منع المافيا يختار مافيا ثاني ───
+        const target = this.players.find(p => p.id === targetId);
+        if (!target || target.role === "MAFIA") return;
+
+        // ─── آخر اختيار هو المعتمد ───
         this.nightActions.mafiaTarget = targetId;
-        console.log(`  Mafia targeted: ${targetId} (by ${player.username})`);
+        console.log(`  Mafia targeted: ${target.username} (suggested by ${player.username})`);
+
+        // ─── أبلغ كل المافيا الأحياء بالاقتراح الحالي ───
+        this.players.forEach(p => {
+            if (p.role === "MAFIA" && p.alive) {
+                this.io.to(p.id).emit("mafia_suggestion", {
+                    suggestedBy:     player.username,
+                    targetId,
+                    targetUsername:  target.username,
+                });
+            }
+        });
 
         this.nightActionStatus.mafia = { done: true, username: player.username };
         this._sendNightStatusToAdmin();
