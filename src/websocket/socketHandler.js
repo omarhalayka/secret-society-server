@@ -56,41 +56,27 @@ function initializeSocket(io) {
             matchmakingManager.addToQueue(player, io);
         });
 
-        // ================= ADMIN ADD PLAYER =================
+        // ================= ADMIN GENERATE ROOM CODE =================
 
-        socket.on("admin_add_player", (data) => {
+        socket.on("admin_generate_room_code", () => {
             if (!socket.data.isAdmin) return;
-            const { username } = data || {};
-            if (!username?.trim()) return;
 
             const room = roomManager.getRoom(socket.data.roomId);
             if (!room?.engine) return;
 
-            // تحقق إن اللاعب موجود في الغرفة
-            const existingPlayer = room.players.find(
-                p => p.username.toLowerCase() === username.trim().toLowerCase()
-            );
-            if (!existingPlayer) {
-                socket.emit("admin_add_player_error", { message: `"${username}" غير موجود في الغرفة` });
-                return;
-            }
-
-            // ولّد كود رجوع عشوائي 6 أرقام
+            // ولّد كود عام للغرفة
             const code = Math.floor(100000 + Math.random() * 900000).toString();
             rejoinCodes[code] = {
-                username:  existingPlayer.username,
-                roomId:    room.id,
-                role:      existingPlayer.role,
-                expires:   Date.now() + 10 * 60 * 1000, // 10 دقائق
+                roomId:  room.id,
+                expires: Date.now() + 15 * 60 * 1000, // 15 دقيقة
             };
 
-            console.log(`✅ Rejoin code ${code} generated for ${existingPlayer.username}`);
+            console.log(`✅ Room rejoin code: ${code} for room ${room.id}`);
 
-            // ابعث الكود للأدمن
-            socket.emit("rejoin_code_generated", {
+            // ابعث الكود للأدمن مع قائمة اللاعبين
+            socket.emit("room_code_generated", {
                 code,
-                username: existingPlayer.username,
-                role:     existingPlayer.role,
+                players: room.players.map(p => ({ id: p.id, username: p.username, alive: p.alive, role: p.role })),
             });
         });
 
@@ -102,7 +88,6 @@ function initializeSocket(io) {
 
             const entry = rejoinCodes[code];
 
-            // تحقق من الكود
             if (!entry) {
                 socket.emit("rejoin_code_error", { message: "كود غلط ❌" });
                 return;
@@ -110,10 +95,6 @@ function initializeSocket(io) {
             if (Date.now() > entry.expires) {
                 delete rejoinCodes[code];
                 socket.emit("rejoin_code_error", { message: "الكود انتهت صلاحيته" });
-                return;
-            }
-            if (entry.username.toLowerCase() !== username.trim().toLowerCase()) {
-                socket.emit("rejoin_code_error", { message: "الاسم غير متطابق ❌" });
                 return;
             }
 
@@ -124,20 +105,28 @@ function initializeSocket(io) {
                 return;
             }
 
-            // حدّث اللاعب في الغرفة
-            const player = room.players.find(p => p.username === entry.username);
-            if (!player) {
-                socket.emit("rejoin_code_error", { message: "اللاعب غير موجود في الغرفة" });
+            // ابحث عن اللاعب باسمه
+            const isCheckOnly = username.trim() === "##CHECK_CODE##";
+            const player = isCheckOnly ? null : room.players.find(
+                p => p.username.toLowerCase() === username.trim().toLowerCase()
+            );
+
+            if (isCheckOnly || !player) {
+                // ارجع قائمة اللاعبين عشان يختار
+                socket.emit("rejoin_code_error", {
+                    message: "اختر اسمك من القائمة",
+                    players: room.players.map(p => ({ username: p.username, alive: p.alive })),
+                });
                 return;
             }
 
+            // ─── أدخله للغرفة ───
             player.id          = socket.id;
             socket.data.roomId = entry.roomId;
             socket.data.type   = "PLAYER";
             socket.join(entry.roomId);
-            delete rejoinCodes[code]; // الكود يُستخدم مرة واحدة بس
+            // الكود يظل صالح عشان باقي اللاعبين يستخدموه
 
-            // فلترة الأدوار
             const filteredPlayers = room.players.map(p => ({
                 id:       p.id,
                 username: p.username,
@@ -159,7 +148,7 @@ function initializeSocket(io) {
                 round:   room.engine.round,
             });
 
-            console.log(`✅ ${entry.username} rejoined via code`);
+            console.log(`✅ ${username} rejoined room ${entry.roomId} via code`);
         });
 
         // ================= REJOIN GAME =================
