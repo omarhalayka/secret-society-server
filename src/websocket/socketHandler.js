@@ -73,28 +73,50 @@ function initializeSocket(io) {
             }
 
             // حدّث الـ socket ID للاعب
-            existingPlayer.id = socket.id;
+            existingPlayer.id  = socket.id;
             socket.data.roomId = roomId;
             socket.data.type   = "PLAYER";
             socket.join(roomId);
 
             // لو كان أدمن
             if (role === "ADMIN") {
-                socket.data.isAdmin = true;
-                socket.data.type    = "ADMIN";
-                room.engine.adminId = socket.id;
+                socket.data.isAdmin    = true;
+                socket.data.type       = "ADMIN";
+                room.engine.adminId    = socket.id;
                 socket.emit("game_started", { roomId, role: "ADMIN" });
+
+                // الأدمن يشوف كل الأدوار
+                socket.emit("room_state", {
+                    players: room.players,
+                    phase:   room.engine.phase,
+                    round:   room.engine.round,
+                });
             } else {
                 socket.emit("game_started", { roomId, role: existingPlayer.role });
+
+                // ─── فلترة الأدوار — نفس منطق request_room_state ───
+                const filteredPlayers = room.players.map(p => ({
+                    id:       p.id,
+                    username: p.username,
+                    alive:    p.alive,
+                    userType: p.userType,
+                    role:     (p.id === socket.id || socket.data.isAdmin) ? p.role : null,
+                }));
+                // المافيا تشوف زملاءها
+                if (existingPlayer.role === "MAFIA") {
+                    filteredPlayers.forEach(fp => {
+                        const orig = room.players.find(p => p.id === fp.id);
+                        if (orig?.role === "MAFIA") fp.role = "MAFIA";
+                    });
+                }
+                socket.emit("room_state", {
+                    players: filteredPlayers,
+                    phase:   room.engine.phase,
+                    round:   room.engine.round,
+                });
             }
 
-            socket.emit("room_state", {
-                players: room.players,
-                phase:   room.engine.phase,
-                round:   room.engine.round,
-            });
-
-            console.log(`✅ Player ${username} rejoined room ${roomId}`);
+            console.log(`✅ Player ${username} rejoined room ${roomId} as ${existingPlayer.role}`);
         });
 
         socket.on("join_admin", () => {
