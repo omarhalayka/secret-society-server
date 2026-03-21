@@ -105,18 +105,12 @@ function initializeSocket(io) {
                 return;
             }
 
-            // ابحث عن اللاعب باسمه
-            const isCheckOnly = username.trim() === "##CHECK_CODE##";
-            const player = isCheckOnly ? null : room.players.find(
+            // ابحث عن اللاعب باسمه بالضبط
+            const player = room.players.find(
                 p => p.username.toLowerCase() === username.trim().toLowerCase()
             );
-
-            if (isCheckOnly || !player) {
-                // ارجع قائمة اللاعبين عشان يختار
-                socket.emit("rejoin_code_error", {
-                    message: "اختر اسمك من القائمة",
-                    players: room.players.map(p => ({ username: p.username, alive: p.alive })),
-                });
+            if (!player) {
+                socket.emit("rejoin_code_error", { message: `"${username.trim()}" غير موجود في الغرفة ❌` });
                 return;
             }
 
