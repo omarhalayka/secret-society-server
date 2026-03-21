@@ -53,7 +53,49 @@ function initializeSocket(io) {
             matchmakingManager.addToQueue(player, io);
         });
 
-        // ================= ADMIN JOIN =================
+        // ================= REJOIN GAME =================
+
+        socket.on("rejoin_game", (data) => {
+            const { roomId, username, role } = data || {};
+            if (!roomId || !username) return;
+
+            const room = roomManager.getRoom(roomId);
+            if (!room?.engine || room.engine.phase === "GAME_OVER") {
+                socket.emit("rejoin_failed", { message: "Game session has ended" });
+                return;
+            }
+
+            // ابحث عن اللاعب في الغرفة باسمه
+            const existingPlayer = room.players.find(p => p.username === username);
+            if (!existingPlayer) {
+                socket.emit("rejoin_failed", { message: "Player not found in session" });
+                return;
+            }
+
+            // حدّث الـ socket ID للاعب
+            existingPlayer.id = socket.id;
+            socket.data.roomId = roomId;
+            socket.data.type   = "PLAYER";
+            socket.join(roomId);
+
+            // لو كان أدمن
+            if (role === "ADMIN") {
+                socket.data.isAdmin = true;
+                socket.data.type    = "ADMIN";
+                room.engine.adminId = socket.id;
+                socket.emit("game_started", { roomId, role: "ADMIN" });
+            } else {
+                socket.emit("game_started", { roomId, role: existingPlayer.role });
+            }
+
+            socket.emit("room_state", {
+                players: room.players,
+                phase:   room.engine.phase,
+                round:   room.engine.round,
+            });
+
+            console.log(`✅ Player ${username} rejoined room ${roomId}`);
+        });
 
         socket.on("join_admin", () => {
             socket.data.isAdmin = true;
