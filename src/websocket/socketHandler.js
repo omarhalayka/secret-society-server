@@ -58,51 +58,21 @@ function initializeSocket(io) {
 
         // ================= ADMIN GENERATE ROOM CODE =================
 
-        socket.on("admin_generate_room_code", (data) => {
+        socket.on("admin_generate_room_code", () => {
             if (!socket.data.isAdmin) return;
 
             const room = roomManager.getRoom(socket.data.roomId);
             if (!room?.engine) return;
 
-            const targetUsername = data?.username?.trim();
-
-            // لو ما حدد اسم — ابعث قائمة اللاعبين
-            if (!targetUsername) {
-                socket.emit("room_players_list", {
-                    players: room.players.map(p => ({
-                        username: p.username,
-                        role:     p.role,
-                        alive:    p.alive,
-                    })),
-                });
-                return;
-            }
-
-            // ابحث عن اللاعب
-            const targetPlayer = room.players.find(
-                p => p.username.toLowerCase() === targetUsername.toLowerCase()
-            );
-            if (!targetPlayer) {
-                socket.emit("room_code_error", { message: `"${targetUsername}" غير موجود` });
-                return;
-            }
-
-            // ولّد الكود مرتبط بدور اللاعب
+            // ولّد كود عام للغرفة صالح 15 دقيقة
             const code = Math.floor(100000 + Math.random() * 900000).toString();
             rejoinCodes[code] = {
-                roomId:   room.id,
-                role:     targetPlayer.role,
-                alive:    targetPlayer.alive,
-                replaces: targetPlayer.username, // الاسم القديم للاعب
-                expires:  Date.now() + 15 * 60 * 1000,
+                roomId:  room.id,
+                expires: Date.now() + 15 * 60 * 1000,
             };
 
-            // نشيل اللاعب القديم من الغرفة عشان مايصير عندنا لاعبين بنفس الدور
-            room.players = room.players.filter(p => p.username !== targetPlayer.username);
-
-            console.log(`✅ Code ${code} → role: ${targetPlayer.role} (replacing ${targetPlayer.username})`);
-
-            socket.emit("room_code_generated", { code, role: targetPlayer.role, replaces: targetPlayer.username });
+            console.log(`✅ Room code: ${code}`);
+            socket.emit("room_code_generated", { code });
         });
 
         // ================= REJOIN WITH CODE =================
@@ -112,11 +82,7 @@ function initializeSocket(io) {
             if (!code || !username?.trim()) return;
 
             const entry = rejoinCodes[code];
-
-            if (!entry) {
-                socket.emit("rejoin_code_error", { message: "كود غلط ❌" });
-                return;
-            }
+            if (!entry) { socket.emit("rejoin_code_error", { message: "كود غلط ❌" }); return; }
             if (Date.now() > entry.expires) {
                 delete rejoinCodes[code];
                 socket.emit("rejoin_code_error", { message: "الكود انتهت صلاحيته" });
@@ -130,22 +96,33 @@ function initializeSocket(io) {
                 return;
             }
 
-            // ─── أضف اللاعب الجديد للغرفة بدور اللاعب الذي خرج ───
-            const newPlayer = {
-                id:       socket.id,
-                username: username.trim(),
-                role:     entry.role,
-                alive:    entry.alive,
-                userType: "PLAYER",
-            };
-            room.players.push(newPlayer);
+            // ─── ابحث عن دور ناقص (لاعب مش موجود = socket غير متصل) ───
+            const connectedIds = new Set([...io.sockets.sockets.keys()]);
+            const missingPlayer = room.players.find(p => !connectedIds.has(p.id));
+
+            let assignedRole = "CITIZEN";
+            if (missingPlayer) {
+                // خذ مكان اللاعب الناقص
+                missingPlayer.id       = socket.id;
+                missingPlayer.username = username.trim();
+                assignedRole           = missingPlayer.role;
+            } else {
+                // كل اللاعبين موجودين — أضف كـ CITIZEN إضافي
+                room.players.push({
+                    id:       socket.id,
+                    username: username.trim(),
+                    role:     "CITIZEN",
+                    alive:    true,
+                    userType: "PLAYER",
+                });
+            }
 
             socket.data.roomId = entry.roomId;
             socket.data.type   = "PLAYER";
             socket.join(entry.roomId);
             delete rejoinCodes[code];
 
-            // فلترة الأدوار
+            // فلترة الأدوار للاعب الجديد
             const filteredPlayers = room.players.map(p => ({
                 id:       p.id,
                 username: p.username,
@@ -153,7 +130,7 @@ function initializeSocket(io) {
                 userType: p.userType,
                 role:     p.id === socket.id ? p.role : null,
             }));
-            if (newPlayer.role === "MAFIA") {
+            if (assignedRole === "MAFIA") {
                 filteredPlayers.forEach(fp => {
                     const orig = room.players.find(p => p.id === fp.id);
                     if (orig?.role === "MAFIA") fp.role = "MAFIA";
@@ -161,21 +138,21 @@ function initializeSocket(io) {
             }
 
             // ─── أبلغ اللاعب الجديد ───
-            socket.emit("game_started", { roomId: entry.roomId, role: newPlayer.role });
+            socket.emit("game_started", { roomId: entry.roomId, role: assignedRole });
             socket.emit("room_state", {
                 players: filteredPlayers,
                 phase:   room.engine.phase,
                 round:   room.engine.round,
             });
 
-            // ─── أبلغ بقية اللاعبين بالتحديث (refresh خفيف) ───
+            // ─── refresh للكل ───
             io.to(entry.roomId).emit("room_state", {
                 players: room.players,
                 phase:   room.engine.phase,
                 round:   room.engine.round,
             });
 
-            console.log(`✅ ${username} joined as ${entry.role} (replaced ${entry.replaces})`);
+            console.log(`✅ ${username} joined as ${assignedRole}`);
         });
 
         // ================= REJOIN GAME =================
