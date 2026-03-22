@@ -354,6 +354,68 @@ function initializeSocket(io) {
             console.log(`✅ Spectator ${socket.id} joined room ${activeRoom.id}`);
         });
 
+        // ================= VOICE CHAT =================
+
+        socket.on("voice_peer_id", (data) => {
+            const { peerId } = data || {};
+            if (!peerId) return;
+
+            // احفظ الـ peer ID للـ socket
+            socket.data.peerId = peerId;
+
+            // لو في غرفة — ابعث الـ peer ID لكل الباقيين وابعثهم peer IDs
+            if (socket.data.roomId) {
+                const room = roomManager.getRoom(socket.data.roomId);
+                if (!room) return;
+
+                // ابعث للـ socket الحالي كل الـ peer IDs الموجودة
+                const existing = room.players
+                    .filter(p => p.id !== socket.id && io.sockets.sockets.get(p.id)?.data?.peerId)
+                    .map(p => ({
+                        socketId: p.id,
+                        peerId:   io.sockets.sockets.get(p.id).data.peerId,
+                        username: p.username,
+                        role:     p.role,
+                        alive:    p.alive,
+                    }));
+                socket.emit("voice_peers", { peers: existing });
+
+                // ابعث للباقيين الـ peer ID الجديد
+                const myPlayer = room.players.find(p => p.id === socket.id);
+                socket.to(room.id).emit("voice_peer_joined", {
+                    socketId: socket.id,
+                    peerId,
+                    username: myPlayer?.username || "Unknown",
+                    role:     myPlayer?.role     || "CITIZEN",
+                    alive:    myPlayer?.alive    ?? true,
+                });
+            }
+
+            // لو أدمن
+            if (socket.data.isAdmin && socket.data.roomId) {
+                const room = roomManager.getRoom(socket.data.roomId);
+                if (room) {
+                    const existing = room.players
+                        .filter(p => io.sockets.sockets.get(p.id)?.data?.peerId)
+                        .map(p => ({
+                            socketId: p.id,
+                            peerId:   io.sockets.sockets.get(p.id).data.peerId,
+                            username: p.username,
+                            role:     p.role,
+                            alive:    p.alive,
+                        }));
+                    socket.emit("voice_peers", { peers: existing });
+                    socket.to(room.id).emit("voice_peer_joined", {
+                        socketId: socket.id,
+                        peerId,
+                        username: "ADMIN",
+                        role:     "ADMIN",
+                        alive:    true,
+                    });
+                }
+            }
+        });
+
         // ================= GAME ACTIONS =================
 
         socket.on("mafia_kill", (targetId) => {
