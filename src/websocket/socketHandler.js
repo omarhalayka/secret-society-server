@@ -96,18 +96,24 @@ function initializeSocket(io) {
                 return;
             }
 
-            // ─── ابحث عن دور ناقص (لاعب مش موجود = socket غير متصل) ───
+            // ─── ابحث عن دور ناقص ───
+            // اللاعب الناقص = socket ID مش موجود في الاتصالات الحالية
             const connectedIds = new Set([...io.sockets.sockets.keys()]);
+
+            // استثني الـ socket الحالي نفسه من القائمة
+            connectedIds.delete(socket.id);
+
             const missingPlayer = room.players.find(p => !connectedIds.has(p.id));
 
             let assignedRole = "CITIZEN";
             if (missingPlayer) {
-                // خذ مكان اللاعب الناقص
+                // خذ مكان اللاعب الناقص وخذ دوره
+                console.log(`Replacing missing player: ${missingPlayer.username} (${missingPlayer.role})`);
+                assignedRole           = missingPlayer.role;
                 missingPlayer.id       = socket.id;
                 missingPlayer.username = username.trim();
-                assignedRole           = missingPlayer.role;
             } else {
-                // كل اللاعبين موجودين — أضف كـ CITIZEN إضافي
+                // كل اللاعبين موجودين — أضف كـ CITIZEN
                 room.players.push({
                     id:       socket.id,
                     username: username.trim(),
