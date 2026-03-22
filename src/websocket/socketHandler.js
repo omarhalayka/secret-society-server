@@ -96,24 +96,18 @@ function initializeSocket(io) {
                 return;
             }
 
-            // ─── ابحث عن دور ناقص ───
-            // اللاعب الناقص = socket ID مش موجود في الاتصالات الحالية
-            const connectedIds = new Set([...io.sockets.sockets.keys()]);
-
-            // استثني الـ socket الحالي نفسه من القائمة
-            connectedIds.delete(socket.id);
-
-            const missingPlayer = room.players.find(p => !connectedIds.has(p.id));
+            // ─── ابحث عن لاعب disconnected ───
+            const missingPlayer = room.players.find(p => p.disconnected);
 
             let assignedRole = "CITIZEN";
             if (missingPlayer) {
-                // خذ مكان اللاعب الناقص وخذ دوره
-                console.log(`Replacing missing player: ${missingPlayer.username} (${missingPlayer.role})`);
-                assignedRole           = missingPlayer.role;
-                missingPlayer.id       = socket.id;
-                missingPlayer.username = username.trim();
+                console.log(`Replacing disconnected: ${missingPlayer.username} (${missingPlayer.role})`);
+                assignedRole               = missingPlayer.role;
+                missingPlayer.id           = socket.id;
+                missingPlayer.username     = username.trim();
+                missingPlayer.disconnected = false;
             } else {
-                // كل اللاعبين موجودين — أضف كـ CITIZEN
+                // ما في أحد disconnected — أضف كـ CITIZEN
                 room.players.push({
                     id:       socket.id,
                     username: username.trim(),
@@ -552,8 +546,10 @@ function initializeSocket(io) {
             const room = roomManager.getRoom(socket.data.roomId);
             if (!room?.engine) return;
 
-            // فلترة الأدوار: كل لاعب يشوف دوره فقط — الميت دوره مخفي حتى نهاية اللعبة
-            const filteredPlayers = room.players.map(p => ({
+            // فلترة اللاعبين — نشيل الـ disconnected من العرض
+            const activePlayers = room.players.filter(p => !p.disconnected);
+
+            const filteredPlayers = activePlayers.map(p => ({
                 id:       p.id,
                 username: p.username,
                 alive:    p.alive,
@@ -636,24 +632,24 @@ function initializeSocket(io) {
             lobbyManager.removePlayer(socket.id);
             matchmakingManager.removeFromQueue(socket.id);
 
-            // ─── نشيل اللاعب من الغرفة لو كان فيها ───
             if (socket.data.roomId) {
                 const room = roomManager.getRoom(socket.data.roomId);
                 if (room) {
-                    // نحذف اللاعب من قائمة الغرفة
-                    room.players = room.players.filter(p => p.id !== socket.id);
-                    console.log(`Player ${socket.id} removed from room ${socket.data.roomId}`);
+                    const player = room.players.find(p => p.id === socket.id);
+                    if (player) {
+                        // ─── نعلّمه كـ disconnected بدل ما نشيله ───
+                        // عشان البديل يقدر يلاقي دوره لاحقاً
+                        player.disconnected = true;
+                        console.log(`Player ${player.username} (${player.role}) disconnected from room`);
+                    }
 
-                    // لو الغرفة فاضية تماماً — نحذفها
-                    const activeSockets = room.players.filter(p => {
-                        return io.sockets.sockets.has(p.id);
-                    });
+                    // لو كل اللاعبين disconnected — نحذف الغرفة
+                    const activeSockets = room.players.filter(p => !p.disconnected);
                     if (activeSockets.length === 0) {
                         roomManager.removeRoom(socket.data.roomId);
-                        // reset كلمة السر لما الجلسة تنتهي
                         sessionPassword = null;
                         io.emit("session_password_ready", { ready: false });
-                        console.log(`Room ${socket.data.roomId} removed — session reset`);
+                        console.log(`Room ${socket.data.roomId} removed — all disconnected`);
                     }
                 }
             }
