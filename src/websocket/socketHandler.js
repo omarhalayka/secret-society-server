@@ -146,6 +146,9 @@ function initializeSocket(io) {
                 round:   room.engine.round,
             });
 
+            // ─── أبلغ الموجودين يعيدوا تسجيل الـ peer ID عشان البديل يسمعهم ───
+            io.to(entry.roomId).emit("voice_reconnect_request");
+
             console.log(`✅ ${username} joined as ${entry.role}`);
         });
 
