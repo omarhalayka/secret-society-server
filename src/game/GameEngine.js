@@ -73,8 +73,35 @@ class GameEngine {
         this.io.to(this.adminId).emit("night_action_status", this.nightActionStatus);
     }
 
+    // ─── إعادة ضبط بيانات الليل بالكامل ───
+    clearNightActions() {
+        this.nightActions = {
+            mafiaTarget: null,
+            doctorSave: null,
+            detectiveChecks: []
+        };
+        this.nightActionStatus = {
+            mafia: { done: false, username: null },
+            doctor: { done: false, username: null },
+            detective: { done: false, username: null },
+        };
+        this.nightResults = {
+            mafiaTarget: null,
+            doctorSave: null,
+            detectiveChecks: [],
+            finalVictim: null,
+            summary: {}
+        };
+    }
+
     // ================= RESET =================
     resetGame() {
+        // إلغاء أي مؤقت معلق
+        if (this._pendingTimer) {
+            clearTimeout(this._pendingTimer);
+            this._pendingTimer = null;
+        }
+
         this.gameOver = false;
         this.round    = 1;
         this.phase    = this.PHASES.LOBBY;
@@ -83,18 +110,8 @@ class GameEngine {
 
         this.players.forEach(p => { p.alive = true; p.role = null; });
 
-        this.nightActions = { mafiaTarget: null, doctorSave: null, detectiveChecks: [] };
-
-        this.nightActionStatus = {
-            mafia:     { done: false, username: null },
-            doctor:    { done: false, username: null },
-            detective: { done: false, username: null },
-        };
-
-        this.nightResults = {
-            mafiaTarget: null, doctorSave: null,
-            detectiveChecks: [], finalVictim: null, summary: {}
-        };
+        // تنظيف بيانات الليل
+        this.clearNightActions();
 
         this.gameStats = {
             startTime:          Date.now(),
@@ -103,7 +120,6 @@ class GameEngine {
             gameLog:            [],
         };
 
-        if (this._pendingTimer) { clearTimeout(this._pendingTimer); this._pendingTimer = null; }
         this.broadcast("back_to_lobby", {});
     }
 
@@ -133,7 +149,11 @@ class GameEngine {
             round:   this.round
         });
 
-        if (this._pendingTimer) { clearTimeout(this._pendingTimer); this._pendingTimer = null; }
+        // إلغاء أي مؤقت سابق
+        if (this._pendingTimer) {
+            clearTimeout(this._pendingTimer);
+            this._pendingTimer = null;
+        }
 
         // نبدأ بـ DAY — الأدمن يتحكم بالتبديل
         this._pendingTimer = setTimeout(() => {
@@ -152,25 +172,18 @@ class GameEngine {
         }
         this.players.forEach(p => { p.role = "CITIZEN"; p.alive = true; });
 
-        // ─── توزيع الأدوار حسب العدد ───
         const count = this.players.length;
         const mafiaCount = count <= 6 ? 1 : count <= 9 ? 2 : 3;
-        // دكتور دايماً 1، محقق دايماً 1 (إلا لو 4 لاعبين بدون محقق)
         const hasDetective = count >= 5;
 
         let roleIndex = 0;
-        // مافيا
         for (let i = 0; i < mafiaCount; i++) {
             this.players[roleIndex++].role = "MAFIA";
         }
-        // دكتور
         this.players[roleIndex++].role = "DOCTOR";
-        // محقق
         if (hasDetective) {
             this.players[roleIndex++].role = "DETECTIVE";
         }
-        // الباقي مواطنين (بالفعل محددين)
-
         console.log(`Roles assigned (${count} players, ${mafiaCount} mafia):`);
         this.players.forEach(p => console.log(`  ${p.username} -> ${p.role}`));
     }
@@ -178,16 +191,11 @@ class GameEngine {
     // ================= NIGHT =================
     startNight() {
         if (this.gameOver) return;
+
+        // إعادة ضبط بيانات الليل بالكامل (حتى لو بدأ الليل عدة مرات)
+        this.clearNightActions();
+
         this.phase = this.PHASES.NIGHT;
-        this.nightActions = { mafiaTarget: null, doctorSave: null, detectiveChecks: [] };
-
-        // reset حالة الاختيارات
-        this.nightActionStatus = {
-            mafia:     { done: false, username: null },
-            doctor:    { done: false, username: null },
-            detective: { done: false, username: null },
-        };
-
         this.chatEnabled = true;
         this.broadcast("phase_changed", { phase: this.phase, round: this.round });
     }
@@ -197,15 +205,12 @@ class GameEngine {
         if (!player || player.role !== "MAFIA" || !player.alive) return;
         if (this.phase !== this.PHASES.NIGHT) return;
 
-        // ─── منع المافيا يختار مافيا ثاني ───
         const target = this.players.find(p => p.id === targetId);
         if (!target || target.role === "MAFIA") return;
 
-        // ─── آخر اختيار هو المعتمد ───
         this.nightActions.mafiaTarget = targetId;
         console.log(`  Mafia targeted: ${target.username} (suggested by ${player.username})`);
 
-        // ─── أبلغ كل المافيا الأحياء بالاقتراح الحالي ───
         this.players.forEach(p => {
             if (p.role === "MAFIA" && p.alive) {
                 this.io.to(p.id).emit("mafia_suggestion", {
@@ -224,6 +229,7 @@ class GameEngine {
         const player = this.players.find(p => p.id === playerId);
         if (!player || player.role !== "DOCTOR" || !player.alive) return;
         if (this.phase !== this.PHASES.NIGHT) return;
+
         this.nightActions.doctorSave = targetId;
         console.log(`  Doctor saved: ${targetId}`);
 
@@ -239,14 +245,12 @@ class GameEngine {
         const target = this.players.find(p => p.id === targetId);
         if (!target) return;
 
-        const result = target.role; // نبعث الدور الحقيقي: MAFIA / DOCTOR / CITIZEN / DETECTIVE
-
+        const result = target.role;
         this.nightActions.detectiveChecks.push({
             detectiveId: playerId, targetId,
             targetUsername: target.username, result
         });
 
-        // النتيجة تروح فقط للمحقق
         this.io.to(playerId).emit("detective_result", {
             username: target.username,
             role:     result
@@ -274,7 +278,6 @@ class GameEngine {
         this.phase = this.PHASES.NIGHT_REVIEW;
         this.chatEnabled = true;
 
-        // نتائج الليل للأدمن فقط
         if (this.adminId) {
             console.log("Sending night review to admin:", this.nightResults);
             this.io.to(this.adminId).emit("night_review", this.nightResults);
@@ -293,7 +296,6 @@ class GameEngine {
         if (mafiaTarget) {
             const target   = this.players.find(p => p.id === mafiaTarget);
             const saved    = mafiaTarget === doctorSave;
-            // سجّل في الإحصائيات
             this.gameStats.nightKills.push({
                 round:    this.round,
                 username: target?.username || "Unknown",
@@ -385,7 +387,6 @@ class GameEngine {
             const victim = this.players.find(p => p.id === topPlayers[0]);
             if (victim) victim.alive = false;
             this.broadcast("voting_result", { eliminated: victim?.username, tie: false });
-            // سجّل في الإحصائيات
             this.gameStats.votingEliminations.push({
                 round: this.round, username: victim?.username, tie: false
             });
@@ -406,7 +407,14 @@ class GameEngine {
 
         if (this.checkWinCondition()) return;
 
-        setTimeout(() => {
+        // إلغاء أي مؤقت سابق قبل بدء مؤقت جديد
+        if (this._pendingTimer) {
+            clearTimeout(this._pendingTimer);
+            this._pendingTimer = null;
+        }
+
+        this._pendingTimer = setTimeout(() => {
+            this._pendingTimer = null;
             if (this.gameOver) return;
             this.phase = this.PHASES.DAY;
             this.chatEnabled = true;
@@ -430,7 +438,7 @@ class GameEngine {
         this.chatEnabled = true;
 
         const roles    = this.players.map(p => ({ username: p.username, role: p.role, alive: p.alive }));
-        const duration = Math.floor((Date.now() - this.gameStats.startTime) / 60000); // بالدقائق
+        const duration = Math.floor((Date.now() - this.gameStats.startTime) / 60000);
 
         this.broadcast("game_over", {
             winner,
