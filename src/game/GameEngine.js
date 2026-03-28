@@ -1,3 +1,4 @@
+// @ts-nocheck
 class GameEngine {
 
     constructor(players, io, roomId, adminId = null) {
@@ -25,12 +26,11 @@ class GameEngine {
         this.votes = {};
 
         this.nightActions = {
-            mafiaTarget:    null,
-            doctorSave:     null,
+            mafiaTarget:     null,
+            doctorSave:      null,
             detectiveChecks: []
         };
 
-        // تتبع مين خلّص اختياره بالليل — للأدمن فقط
         this.nightActionStatus = {
             mafia:     { done: false, username: null },
             doctor:    { done: false, username: null },
@@ -38,19 +38,22 @@ class GameEngine {
         };
 
         this.nightResults = {
-            mafiaTarget:    null,
-            doctorSave:     null,
+            mafiaTarget:     null,
+            doctorSave:      null,
             detectiveChecks: [],
-            finalVictim:    null,
-            summary:        {}
+            finalVictim:     null,
+            summary:         {}
         };
 
-        // ─── إحصائيات اللعبة للـ Win Screen ───
+        // ─── Doctor restrictions: آخر لاعب أنقذه الطبيب ───
+        this.lastDoctorTarget = null;
+
+        // ─── game stats ───
         this.gameStats = {
-            startTime:          Date.now(),
-            nightKills:         [], // { round, username, saved }
-            votingEliminations: [], // { round, username, tie }
-            gameLog:            [], // { round, type, icon, text }
+            nightKills:          [],
+            votingEliminations:  [],
+            gameLog:             [],
+            startTime:           Date.now(),
         };
     }
 
@@ -67,59 +70,40 @@ class GameEngine {
         this.io.to(this.roomId).emit(event, data);
     }
 
-    // ─── helper: بعث حالة اختيارات الليل للأدمن فقط ───
     _sendNightStatusToAdmin() {
         if (!this.adminId) return;
         this.io.to(this.adminId).emit("night_action_status", this.nightActionStatus);
     }
 
-    // ─── إعادة ضبط بيانات الليل بالكامل ───
-    clearNightActions() {
-        this.nightActions = {
-            mafiaTarget: null,
-            doctorSave: null,
-            detectiveChecks: []
-        };
-        this.nightActionStatus = {
-            mafia: { done: false, username: null },
-            doctor: { done: false, username: null },
-            detective: { done: false, username: null },
-        };
-        this.nightResults = {
-            mafiaTarget: null,
-            doctorSave: null,
-            detectiveChecks: [],
-            finalVictim: null,
-            summary: {}
-        };
-    }
-
     // ================= RESET =================
     resetGame() {
-        // إلغاء أي مؤقت معلق
-        if (this._pendingTimer) {
-            clearTimeout(this._pendingTimer);
-            this._pendingTimer = null;
-        }
-
-        this.gameOver = false;
-        this.round    = 1;
-        this.phase    = this.PHASES.LOBBY;
-        this.votes    = {};
+        this.gameOver    = false;
+        this.round       = 1;
+        this.phase       = this.PHASES.LOBBY;
+        this.votes       = {};
         this.chatEnabled = true;
+        this.lastDoctorTarget = null; // ─── reset doctor memory ───
 
         this.players.forEach(p => { p.alive = true; p.role = null; });
 
-        // تنظيف بيانات الليل
-        this.clearNightActions();
+        this.nightActions = { mafiaTarget: null, doctorSave: null, detectiveChecks: [] };
 
-        this.gameStats = {
-            startTime:          Date.now(),
-            nightKills:         [],
-            votingEliminations: [],
-            gameLog:            [],
+        this.nightActionStatus = {
+            mafia:     { done: false, username: null },
+            doctor:    { done: false, username: null },
+            detective: { done: false, username: null },
         };
 
+        this.nightResults = {
+            mafiaTarget: null, doctorSave: null,
+            detectiveChecks: [], finalVictim: null, summary: {}
+        };
+
+        this.gameStats = {
+            nightKills: [], votingEliminations: [], gameLog: [], startTime: Date.now(),
+        };
+
+        if (this._pendingTimer) { clearTimeout(this._pendingTimer); this._pendingTimer = null; }
         this.broadcast("back_to_lobby", {});
     }
 
@@ -149,13 +133,8 @@ class GameEngine {
             round:   this.round
         });
 
-        // إلغاء أي مؤقت سابق
-        if (this._pendingTimer) {
-            clearTimeout(this._pendingTimer);
-            this._pendingTimer = null;
-        }
+        if (this._pendingTimer) { clearTimeout(this._pendingTimer); this._pendingTimer = null; }
 
-        // نبدأ بـ DAY — الأدمن يتحكم بالتبديل
         this._pendingTimer = setTimeout(() => {
             this._pendingTimer = null;
             this.phase = this.PHASES.DAY;
@@ -166,36 +145,38 @@ class GameEngine {
 
     // ================= ROLES =================
     assignRoles() {
-        for (let i = this.players.length - 1; i > 0; i--) {
+        const count = this.players.length;
+        for (let i = count - 1; i > 0; i--) {
             const j = Math.floor(Math.random() * (i + 1));
             [this.players[i], this.players[j]] = [this.players[j], this.players[i]];
         }
         this.players.forEach(p => { p.role = "CITIZEN"; p.alive = true; });
 
-        const count = this.players.length;
-        const mafiaCount = count <= 6 ? 1 : count <= 9 ? 2 : 3;
-        const hasDetective = count >= 5;
+        let mafiaCount = 1;
+        if (count >= 7 && count <= 9) mafiaCount = 2;
+        else if (count >= 10)         mafiaCount = 3;
 
-        let roleIndex = 0;
-        for (let i = 0; i < mafiaCount; i++) {
-            this.players[roleIndex++].role = "MAFIA";
-        }
-        this.players[roleIndex++].role = "DOCTOR";
-        if (hasDetective) {
-            this.players[roleIndex++].role = "DETECTIVE";
-        }
-        console.log(`Roles assigned (${count} players, ${mafiaCount} mafia):`);
+        let idx = 0;
+        for (let m = 0; m < mafiaCount; m++) this.players[idx++].role = "MAFIA";
+        this.players[idx++].role = "DOCTOR";
+        if (count >= 5) this.players[idx++].role = "DETECTIVE";
+
+        console.log("Roles assigned:");
         this.players.forEach(p => console.log(`  ${p.username} -> ${p.role}`));
     }
 
     // ================= NIGHT =================
     startNight() {
         if (this.gameOver) return;
-
-        // إعادة ضبط بيانات الليل بالكامل (حتى لو بدأ الليل عدة مرات)
-        this.clearNightActions();
-
         this.phase = this.PHASES.NIGHT;
+        this.nightActions = { mafiaTarget: null, doctorSave: null, detectiveChecks: [] };
+
+        this.nightActionStatus = {
+            mafia:     { done: false, username: null },
+            doctor:    { done: false, username: null },
+            detective: { done: false, username: null },
+        };
+
         this.chatEnabled = true;
         this.broadcast("phase_changed", { phase: this.phase, round: this.round });
     }
@@ -204,22 +185,10 @@ class GameEngine {
         const player = this.players.find(p => p.id === playerId);
         if (!player || player.role !== "MAFIA" || !player.alive) return;
         if (this.phase !== this.PHASES.NIGHT) return;
-
-        const target = this.players.find(p => p.id === targetId);
-        if (!target || target.role === "MAFIA") return;
+        if (this.nightActions.mafiaTarget) return;
 
         this.nightActions.mafiaTarget = targetId;
-        console.log(`  Mafia targeted: ${target.username} (suggested by ${player.username})`);
-
-        this.players.forEach(p => {
-            if (p.role === "MAFIA" && p.alive) {
-                this.io.to(p.id).emit("mafia_suggestion", {
-                    suggestedBy:     player.username,
-                    targetId,
-                    targetUsername:  target.username,
-                });
-            }
-        });
+        console.log(`  Mafia targeted: ${targetId} (by ${player.username})`);
 
         this.nightActionStatus.mafia = { done: true, username: player.username };
         this._sendNightStatusToAdmin();
@@ -230,7 +199,24 @@ class GameEngine {
         if (!player || player.role !== "DOCTOR" || !player.alive) return;
         if (this.phase !== this.PHASES.NIGHT) return;
 
+        // ─── Doctor restriction 1: ما يحمي نفسه ───
+        if (playerId === targetId) {
+            this.io.to(playerId).emit("doctor_error", {
+                message: "لا يمكنك حماية نفسك ❌"
+            });
+            return;
+        }
+
+        // ─── Doctor restriction 2: ما يحمي نفس الشخص مرتين متتاليتين ───
+        if (this.lastDoctorTarget === targetId) {
+            this.io.to(playerId).emit("doctor_error", {
+                message: "لا يمكنك حماية نفس الشخص مرتين متتاليتين ❌"
+            });
+            return;
+        }
+
         this.nightActions.doctorSave = targetId;
+        this.lastDoctorTarget        = targetId; // احفظ آخر إنقاذ
         console.log(`  Doctor saved: ${targetId}`);
 
         this.nightActionStatus.doctor = { done: true, username: player.username };
@@ -245,7 +231,8 @@ class GameEngine {
         const target = this.players.find(p => p.id === targetId);
         if (!target) return;
 
-        const result = target.role;
+        const result = target.role === "MAFIA" ? "MAFIA" : "NOT MAFIA";
+
         this.nightActions.detectiveChecks.push({
             detectiveId: playerId, targetId,
             targetUsername: target.username, result
@@ -279,7 +266,6 @@ class GameEngine {
         this.chatEnabled = true;
 
         if (this.adminId) {
-            console.log("Sending night review to admin:", this.nightResults);
             this.io.to(this.adminId).emit("night_review", this.nightResults);
         }
 
@@ -294,8 +280,8 @@ class GameEngine {
         const { finalVictim, mafiaTarget, doctorSave } = this.nightResults;
 
         if (mafiaTarget) {
-            const target   = this.players.find(p => p.id === mafiaTarget);
-            const saved    = mafiaTarget === doctorSave;
+            const target = this.players.find(p => p.id === mafiaTarget);
+            const saved  = mafiaTarget === doctorSave;
             this.gameStats.nightKills.push({
                 round:    this.round,
                 username: target?.username || "Unknown",
@@ -309,7 +295,7 @@ class GameEngine {
                     ? `${target?.username} was targeted but saved by the Doctor`
                     : `${target?.username} was killed in the night`
             });
-        } else if (!mafiaTarget) {
+        } else {
             this.gameStats.gameLog.push({
                 round: this.round, type: "quiet", icon: "🌙",
                 text:  "The night passed in silence"
@@ -356,11 +342,16 @@ class GameEngine {
 
         this.votes[playerId] = targetId;
 
+        const alivePlayers = this.players.filter(p => p.alive).length;
+        const totalVotes   = Object.keys(this.votes).length;
+        const remaining    = alivePlayers - totalVotes;
+
         const count = {};
         Object.values(this.votes).forEach(target => {
             count[target] = (count[target] || 0) + 1;
         });
-        this.broadcast("vote_update", count);
+
+        this.broadcast("vote_update", { votes: count, remaining });
     }
 
     endVoting() {
@@ -371,7 +362,7 @@ class GameEngine {
             count[target] = (count[target] || 0) + 1;
         });
 
-        let maxVotes  = 0;
+        let maxVotes   = 0;
         let topPlayers = [];
 
         for (const id in count) {
@@ -385,36 +376,26 @@ class GameEngine {
 
         if (topPlayers.length === 1) {
             const victim = this.players.find(p => p.id === topPlayers[0]);
-            if (victim) victim.alive = false;
-            this.broadcast("voting_result", { eliminated: victim?.username, tie: false });
-            this.gameStats.votingEliminations.push({
-                round: this.round, username: victim?.username, tie: false
-            });
-            this.gameStats.gameLog.push({
-                round: this.round, type: "vote", icon: "⚖️",
-                text:  `${victim?.username} was eliminated by vote`
-            });
+            if (victim) {
+                victim.alive = false;
+                this.gameStats.votingEliminations.push({
+                    round:    this.round,
+                    username: victim.username,
+                    role:     victim.role
+                });
+                this.gameStats.gameLog.push({
+                    round: this.round, type: "vote", icon: "🗳",
+                    text:  `${victim.username} was eliminated by vote (${victim.role})`
+                });
+            }
+            this.broadcast("voting_result", { eliminated: victim?.username, role: victim?.role, tie: false });
         } else {
             this.broadcast("voting_result", { eliminated: null, tie: true });
-            this.gameStats.votingEliminations.push({
-                round: this.round, username: null, tie: true
-            });
-            this.gameStats.gameLog.push({
-                round: this.round, type: "tie", icon: "🤝",
-                text:  "Vote ended in a tie — no one eliminated"
-            });
         }
 
         if (this.checkWinCondition()) return;
 
-        // إلغاء أي مؤقت سابق قبل بدء مؤقت جديد
-        if (this._pendingTimer) {
-            clearTimeout(this._pendingTimer);
-            this._pendingTimer = null;
-        }
-
-        this._pendingTimer = setTimeout(() => {
-            this._pendingTimer = null;
+        setTimeout(() => {
             if (this.gameOver) return;
             this.phase = this.PHASES.DAY;
             this.chatEnabled = true;
@@ -437,17 +418,18 @@ class GameEngine {
         this.phase    = this.PHASES.GAME_OVER;
         this.chatEnabled = true;
 
-        const roles    = this.players.map(p => ({ username: p.username, role: p.role, alive: p.alive }));
-        const duration = Math.floor((Date.now() - this.gameStats.startTime) / 60000);
+        const duration = Math.floor((Date.now() - this.gameStats.startTime) / 1000);
 
+        const roles = this.players.map(p => ({ username: p.username, role: p.role, alive: p.alive }));
         this.broadcast("game_over", {
             winner,
             roles,
-            rounds:             this.round,
-            duration:           duration > 0 ? `${duration} min` : "< 1 min",
-            nightKills:         this.gameStats.nightKills,
-            votingEliminations: this.gameStats.votingEliminations,
-            gameLog:            this.gameStats.gameLog,
+            stats: {
+                nightKills:         this.gameStats.nightKills,
+                votingEliminations: this.gameStats.votingEliminations,
+                gameLog:            this.gameStats.gameLog,
+                duration,
+            }
         });
     }
 }
