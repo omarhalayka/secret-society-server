@@ -45,15 +45,18 @@ class GameEngine {
             summary:         {}
         };
 
-        // ─── Doctor restrictions: آخر لاعب أنقذه الطبيب ───
+        // ─── Doctor: آخر لاعب أنقذه ───
         this.lastDoctorTarget = null;
+
+        // ─── Mafia: آخر لاعب استهدفته (قاعدة جديدة) ───
+        this.lastMafiaTarget = null;
 
         // ─── game stats ───
         this.gameStats = {
-            nightKills:          [],
-            votingEliminations:  [],
-            gameLog:             [],
-            startTime:           Date.now(),
+            nightKills:         [],
+            votingEliminations: [],
+            gameLog:            [],
+            startTime:          Date.now(),
         };
     }
 
@@ -77,12 +80,13 @@ class GameEngine {
 
     // ================= RESET =================
     resetGame() {
-        this.gameOver    = false;
-        this.round       = 1;
-        this.phase       = this.PHASES.LOBBY;
-        this.votes       = {};
-        this.chatEnabled = true;
-        this.lastDoctorTarget = null; // ─── reset doctor memory ───
+        this.gameOver         = false;
+        this.round            = 1;
+        this.phase            = this.PHASES.LOBBY;
+        this.votes            = {};
+        this.chatEnabled      = true;
+        this.lastDoctorTarget = null;
+        this.lastMafiaTarget  = null; // ← reset قاعدة المافيا
 
         this.players.forEach(p => { p.alive = true; p.role = null; });
 
@@ -185,10 +189,33 @@ class GameEngine {
         const player = this.players.find(p => p.id === playerId);
         if (!player || player.role !== "MAFIA" || !player.alive) return;
         if (this.phase !== this.PHASES.NIGHT) return;
-        if (this.nightActions.mafiaTarget) return;
 
+        // ─── قاعدة المافيا: ما يستهدف نفس الشخص مرتين متتاليتين ───
+        if (this.lastMafiaTarget === targetId) {
+            this.io.to(playerId).emit("mafia_error", {
+                message: "لا يمكنك استهداف نفس الشخص مرتين متتاليتين ❌"
+            });
+            return;
+        }
+
+        // ─── إذا كان فيه اقتراح سابق من مافيا ثانية، نسمح بالتغيير ───
+        // (المافيا تتشاور — آخر تحديد هو الفائز)
         this.nightActions.mafiaTarget = targetId;
         console.log(`  Mafia targeted: ${targetId} (by ${player.username})`);
+
+        // ─── أبلغ المافيا الثانية بالاقتراح ───
+        const target = this.players.find(p => p.id === targetId);
+        if (target) {
+            this.players
+                .filter(p => p.role === "MAFIA" && p.alive && p.id !== playerId)
+                .forEach(m => {
+                    this.io.to(m.id).emit("mafia_suggestion", {
+                        suggestedBy:    player.username,
+                        targetId:       targetId,
+                        targetUsername: target.username,
+                    });
+                });
+        }
 
         this.nightActionStatus.mafia = { done: true, username: player.username };
         this._sendNightStatusToAdmin();
@@ -216,7 +243,7 @@ class GameEngine {
         }
 
         this.nightActions.doctorSave = targetId;
-        this.lastDoctorTarget        = targetId; // احفظ آخر إنقاذ
+        this.lastDoctorTarget        = targetId;
         console.log(`  Doctor saved: ${targetId}`);
 
         this.nightActionStatus.doctor = { done: true, username: player.username };
@@ -240,6 +267,7 @@ class GameEngine {
 
         this.io.to(playerId).emit("detective_result", {
             username: target.username,
+            id:       target.id,       // ← مضاف: يساعد الـ client يحدّث الـ UI
             role:     result
         });
 
@@ -255,6 +283,11 @@ class GameEngine {
 
         const { mafiaTarget, doctorSave, detectiveChecks } = this.nightActions;
         const finalVictim = (mafiaTarget && mafiaTarget !== doctorSave) ? mafiaTarget : null;
+
+        // ─── احفظ آخر هدف للمافيا (بعد انتهاء الليل) ───
+        if (mafiaTarget) {
+            this.lastMafiaTarget = mafiaTarget;
+        }
 
         this.nightResults = {
             mafiaTarget, doctorSave,
@@ -405,8 +438,12 @@ class GameEngine {
 
     // ================= WIN CHECK =================
     checkWinCondition() {
-        const mafiaAlive    = this.players.filter(p => p.role === "MAFIA" && p.alive).length;
-        const citizensAlive = this.players.filter(p => p.role !== "MAFIA" && p.alive).length;
+        // ─── استثنِ ADMIN و SPECTATOR من حساب الفوز ───
+        const activePlayers = this.players.filter(
+            p => p.role !== "ADMIN" && p.role !== "SPECTATOR"
+        );
+        const mafiaAlive    = activePlayers.filter(p => p.role === "MAFIA" && p.alive).length;
+        const citizensAlive = activePlayers.filter(p => p.role !== "MAFIA" && p.alive).length;
 
         if (mafiaAlive === 0)            { this.endGame("CITIZENS"); return true; }
         if (mafiaAlive >= citizensAlive) { this.endGame("MAFIA");    return true; }

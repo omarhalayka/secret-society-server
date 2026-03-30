@@ -3,7 +3,7 @@ const roomManager = require("./roomManager");
 class MatchmakingManager {
     constructor() {
         this.queue = [];
-        this.requiredPlayers = 6; // القيمة الافتراضية
+        this.requiredPlayers = 6;
     }
 
     setRequiredPlayers(count) {
@@ -18,7 +18,7 @@ class MatchmakingManager {
         if (this.queue.find(p => p.id === player.id)) return null;
 
         this.queue.push(player);
-        console.log(`Player joined queue: ${player.username} | Queue: ${this.queue.length}`);
+        console.log(`Player joined queue: ${player.username} | Queue: ${this.queue.length}/${this.requiredPlayers}`);
 
         if (this.queue.length >= this.requiredPlayers) {
             return this.createMatch(io);
@@ -27,8 +27,11 @@ class MatchmakingManager {
     }
 
     removeFromQueue(socketId) {
+        const before = this.queue.length;
         this.queue = this.queue.filter(p => p.id !== socketId);
-        console.log(`Queue size: ${this.queue.length}`);
+        if (this.queue.length < before) {
+            console.log(`Queue size: ${this.queue.length}/${this.requiredPlayers}`);
+        }
     }
 
     createMatch(io) {
@@ -37,7 +40,7 @@ class MatchmakingManager {
         // ابحث عن الأدمن المتصل
         let adminId = null;
         io.sockets.sockets.forEach((client) => {
-            if (client.data && client.data.type === "ADMIN") adminId = client.id;
+            if (client.data && client.data.isAdmin) adminId = client.id;
         });
 
         console.log("Creating match with players:");
@@ -47,32 +50,52 @@ class MatchmakingManager {
         const room = roomManager.createRoom(playersForMatch, io, adminId);
         console.log("Room created:", room.id);
 
-        // ─── ربط كل لاعب بالـ socket room ───
-        // نعمل join هنا فقط — game_started سيبعثه engine.startGame()
+        // ─── ربط كل لاعب بالـ socket room باستخدام callback ───
+        // نحسب كم لاعب أنهى الـ join عشان نبدأ اللعبة بعد اكتمالهم
+        let joinedCount = 0;
+        const totalExpected = playersForMatch.length + (adminId ? 1 : 0);
+
+        const onAllJoined = () => {
+            joinedCount++;
+            if (joinedCount >= totalExpected) {
+                console.log(`All ${joinedCount} sockets joined room ${room.id} — starting game`);
+                room.engine.startGame();
+            }
+        };
+
         playersForMatch.forEach(player => {
             const socket = io.sockets.sockets.get(player.id);
-            if (!socket) return;
-            socket.join(room.id);
+            if (!socket) {
+                // اللاعب انقطع — عدّه كـ joined عشان ما نعلق
+                onAllJoined();
+                return;
+            }
+            socket.join(room.id, onAllJoined);
             socket.data.roomId = room.id;
-            console.log(`Player ${player.username} joined socket room ${room.id}`);
+            console.log(`Player ${player.username} joining socket room ${room.id}`);
         });
 
         // ─── ربط الأدمن إن وجد ───
         if (adminId) {
             const adminSocket = io.sockets.sockets.get(adminId);
             if (adminSocket) {
-                adminSocket.join(room.id);
+                adminSocket.join(room.id, onAllJoined);
                 adminSocket.data.roomId = room.id;
-                room.engine.adminId = adminId; // تأكد إن الـ engine يعرف الأدمن
+                room.engine.adminId = adminId;
                 console.log("Admin attached to room:", room.id);
+            } else {
+                // الأدمن غير متصل — عدّه كـ joined
+                onAllJoined();
             }
         }
 
-        // ─── startGame: يعمل assignRoles + يبعث game_started + room_state + startNight ───
-        // نأخر 300ms عشان كل socket.join ينتهي أولاً
+        // ─── Fallback: لو الـ callback ما اشتغل خلال 3 ثواني (socket.join قديم لا يدعم callback) ───
         setTimeout(() => {
-            room.engine.startGame();
-        }, 300);
+            if (joinedCount < totalExpected && !room.engine.gameStarted) {
+                console.warn(`Fallback: starting game after timeout (joined ${joinedCount}/${totalExpected})`);
+                room.engine.startGame();
+            }
+        }, 3000);
 
         return room;
     }
