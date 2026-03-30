@@ -1,79 +1,43 @@
-// socketHandler.js
-// افترض وجود roomManager معرف مسبقاً في نفس الملف أو مستورد من مكان آخر
-const roomManager = require('./roomManager'); // مثال على الاستيراد
+// src/websocket/socketHandler.js
+// يُعالج فقط request_room_state — يُنادى من index.js
+const roomManager = require("../core/roomManager");
 
-module.exports = (io, socket) => {
-    // ========== معالج الانضمام كمشاهد ==========
-    socket.on("spectator_join_game", (data) => {
-        const room = roomManager.getRoom(socket.data.roomId);
-        if (!room?.engine) return;
+module.exports = function socketHandler(io, socket) {
+    const room = roomManager.getRoom(socket.data.roomId);
+    if (!room?.engine) return;
 
-        // إذا كان المستخدم أصلاً لاعبًا في الغرفة، لا يمكنه الانضمام كمشاهد
-        if (room.players.some(p => p.id === socket.id)) {
-            socket.emit("error", { message: "أنت بالفعل لاعب في هذه الغرفة" });
-            return;
+    const isAdmin     = socket.data.isAdmin;
+    const isSpectator = socket.data.type === "SPECTATOR";
+    const myPlayer    = room.players.find(p => p.id === socket.id);
+
+    const filteredPlayers = room.players.map(p => {
+        // الأدمن يرى كل الأدوار
+        if (isAdmin) {
+            return { ...p };
         }
-
-        // تحويل المستخدم إلى مشاهد
-        socket.data.type = "SPECTATOR";
-        room.spectators = room.spectators || [];
-        if (!room.spectators.includes(socket.id)) {
-            room.spectators.push(socket.id);
+        // المشاهد لا يرى أي دور
+        if (isSpectator) {
+            return { id: p.id, username: p.username, alive: p.alive, avatar: p.avatar, color: p.color, role: null };
         }
+        // اللاعب يرى دوره فقط + زملاء المافيا
+        const showRole =
+            p.id === socket.id ||                             // نفسه
+            !p.alive ||                                       // ميت — الكل يعرف دوره
+            (myPlayer?.role === "MAFIA" && p.role === "MAFIA"); // المافيا تعرف بعضها
 
-        // إرسال حالة منقحة للمشاهد
-        socket.emit("room_state", {
-            players: room.players.map(p => ({
-                id: p.id,
-                username: p.username,
-                alive: p.alive,
-                userType: p.userType,
-                role: null
-            })),
-            phase: room.engine.phase,
-            round: room.engine.round
-        });
-
-        // إعلام الآخرين بوجود مشاهد جديد (اختياري)
-        socket.to(room.id).emit("spectator_joined", { spectatorId: socket.id });
-    });
-
-    // ========== معالج طلب حالة الغرفة (مضاف حديثاً) ==========
-    socket.on("request_room_state", () => {
-        const room = roomManager.getRoom(socket.data.roomId);
-        if (!room?.engine) return;
-
-        const isSpectator = socket.data.type === "SPECTATOR";
-
-        const filteredPlayers = room.players.map(p => ({
+        return {
             id:       p.id,
             username: p.username,
             alive:    p.alive,
-            userType: p.userType,
-            // المشاهد ما يشوف أي دور
-            role: isSpectator ? null :
-                  (p.id === socket.id || socket.data.isAdmin) ? p.role : null,
-        }));
-
-        if (!isSpectator) {
-            const myPlayer = room.players.find(p => p.id === socket.id);
-            if (myPlayer?.role === "MAFIA") {
-                filteredPlayers.forEach(fp => {
-                    const orig = room.players.find(p => p.id === fp.id);
-                    if (orig?.role === "MAFIA") fp.role = "MAFIA";
-                });
-            }
-        }
-
-        socket.emit("room_state", {
-            players: filteredPlayers,
-            phase:   room.engine.phase,
-            round:   room.engine.round
-        });
+            avatar:   p.avatar || "😎",
+            color:    p.color  || "#1e293b",
+            role:     showRole ? p.role : null,
+        };
     });
 
-    // ========== يمكن إضافة معالجات أخرى هنا ==========
-    // مثال:
-    // socket.on("disconnect", () => { ... });
-    // socket.on("some_other_event", () => { ... });
+    socket.emit("room_state", {
+        players: filteredPlayers,
+        phase:   room.engine.phase,
+        round:   room.engine.round,
+    });
 };

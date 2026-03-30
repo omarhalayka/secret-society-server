@@ -1,47 +1,49 @@
+// src/core/roomManager.js
 const { v4: uuidv4 } = require("uuid");
-const GameEngine = require("../game/GameEngine");
+const GameEngine     = require("../game/GameEngine");
+const logger         = require("../utils/logger");
 
 class RoomManager {
     constructor() {
-        this.rooms = new Map();
+        this.rooms = new Map(); // roomId → room
     }
 
     createRoom(players, io, adminId = null) {
         const roomId = uuidv4();
 
-        // تحويل اللاعبين إلى شكل داخلي للغرفة
         const roomPlayers = players.map(p => ({
-            id: p.id,
+            id:       p.id,
             username: p.username,
-            role: null, // سيتم تعيينه لاحقاً
-            alive: true
+            avatar:   p.avatar || "😎",
+            color:    p.color  || "#1e293b",
+            role:     null,
+            alive:    true,
         }));
 
         const room = {
-            id: roomId,
-            players: roomPlayers,
-            engine: null
+            id:         roomId,
+            players:    roomPlayers,
+            spectators: [],
+            engine:     null,
+            createdAt:  Date.now(),
         };
 
-        // إنشاء المحرك وربطه مع تمرير adminId
         room.engine = new GameEngine(roomPlayers, io, roomId, adminId);
 
         this.rooms.set(roomId, room);
-
-        console.log(`Room created: ${roomId}`);
-        console.log(`Players in room: ${roomPlayers.length}`);
+        logger.info("ROOM", "Room created", { roomId, players: roomPlayers.length });
 
         return room;
     }
 
     getRoom(roomId) {
-        return this.rooms.get(roomId);
+        return this.rooms.get(roomId) || null;
     }
 
     removeRoom(roomId) {
         if (this.rooms.has(roomId)) {
             this.rooms.delete(roomId);
-            console.log(`Room removed: ${roomId}`);
+            logger.info("ROOM", "Room removed", { roomId });
         }
     }
 

@@ -1,47 +1,41 @@
+// src/core/lobbyManager.js
+const logger = require("../utils/logger");
+
 class LobbyManager {
     constructor() {
-        this.players = new Map();
+        this.players = new Map(); // socketId → player
     }
 
     addPlayer(socket) {
         const player = {
-            id: socket.id,
-            username: `Guest_${socket.id.substring(0, 5)}`,
-            connectedAt: Date.now()
+            id:          socket.id,
+            username:    `Guest_${socket.id.substring(0, 5)}`,
+            avatar:      "😎",
+            color:       "#1e293b",
+            connectedAt: Date.now(),
         };
-
         this.players.set(socket.id, player);
-
-        console.log(`Player added: ${player.username}`);
-        console.log(`Total players: ${this.players.size}`);
-
+        logger.connect(socket.id);
         return player;
     }
 
     removePlayer(socketId) {
         const player = this.players.get(socketId);
-
         if (player) {
             this.players.delete(socketId);
-            console.log(`Player removed: ${player.username}`);
-            console.log(`Total players: ${this.players.size}`);
+            logger.disconnect(socketId, "removed from lobby");
         }
     }
 
     updateUsername(socketId, newUsername) {
         const player = this.players.get(socketId);
-
-        if (player) {
-            player.username = newUsername;
-            console.log(`Username updated: ${newUsername}`);
-            return player;
-        }
-
-        return null;
+        if (!player) return null;
+        player.username = newUsername;
+        return player;
     }
 
     getPlayer(socketId) {
-        return this.players.get(socketId);
+        return this.players.get(socketId) || null;
     }
 
     getAllPlayers() {

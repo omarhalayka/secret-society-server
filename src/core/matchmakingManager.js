@@ -1,8 +1,10 @@
+// src/core/matchmakingManager.js
 const roomManager = require("./roomManager");
+const logger      = require("../utils/logger");
 
 class MatchmakingManager {
     constructor() {
-        this.queue = [];
+        this.queue           = [];
         this.requiredPlayers = 6;
     }
 
@@ -10,15 +12,16 @@ class MatchmakingManager {
         const n = parseInt(count);
         if (n >= 4 && n <= 12) {
             this.requiredPlayers = n;
-            console.log(`Required players set to: ${this.requiredPlayers}`);
+            logger.info("MATCH", `Required players set to ${n}`);
         }
     }
 
     addToQueue(player, io) {
+        // لا تضيف نفس اللاعب مرتين
         if (this.queue.find(p => p.id === player.id)) return null;
 
         this.queue.push(player);
-        console.log(`Player joined queue: ${player.username} | Queue: ${this.queue.length}/${this.requiredPlayers}`);
+        logger.join(player.username, `queue ${this.queue.length}/${this.requiredPlayers}`);
 
         if (this.queue.length >= this.requiredPlayers) {
             return this.createMatch(io);
@@ -30,7 +33,9 @@ class MatchmakingManager {
         const before = this.queue.length;
         this.queue = this.queue.filter(p => p.id !== socketId);
         if (this.queue.length < before) {
-            console.log(`Queue size: ${this.queue.length}/${this.requiredPlayers}`);
+            logger.info("MATCH", `Player removed from queue`, {
+                remaining: this.queue.length,
+            });
         }
     }
 
@@ -40,25 +45,27 @@ class MatchmakingManager {
         // ابحث عن الأدمن المتصل
         let adminId = null;
         io.sockets.sockets.forEach((client) => {
-            if (client.data && client.data.isAdmin) adminId = client.id;
+            if (client.data?.isAdmin) adminId = client.id;
         });
 
-        console.log("Creating match with players:");
-        playersForMatch.forEach(p => console.log(` - ${p.username}`));
+        logger.info("MATCH", "Creating match", {
+            players: playersForMatch.map(p => p.username).join(", "),
+            adminId: adminId ? "yes" : "none",
+        });
 
-        // ─── أنشئ الغرفة ───
         const room = roomManager.createRoom(playersForMatch, io, adminId);
-        console.log("Room created:", room.id);
 
-        // ─── ربط كل لاعب بالـ socket room باستخدام callback ───
-        // نحسب كم لاعب أنهى الـ join عشان نبدأ اللعبة بعد اكتمالهم
-        let joinedCount = 0;
-        const totalExpected = playersForMatch.length + (adminId ? 1 : 0);
+        // ─── ربط الـ sockets بالغرفة ─────────────────────────────────────
+        // نستخدم Promise.all مع callback لضمان اكتمال الـ join قبل startGame
+        let joinedCount      = 0;
+        const allSockets     = [...playersForMatch.map(p => p.id)];
+        if (adminId) allSockets.push(adminId);
+        const totalExpected  = allSockets.length;
 
         const onAllJoined = () => {
             joinedCount++;
             if (joinedCount >= totalExpected) {
-                console.log(`All ${joinedCount} sockets joined room ${room.id} — starting game`);
+                logger.info("MATCH", `All sockets joined room ${room.id} — starting game`);
                 room.engine.startGame();
             }
         };
@@ -66,36 +73,41 @@ class MatchmakingManager {
         playersForMatch.forEach(player => {
             const socket = io.sockets.sockets.get(player.id);
             if (!socket) {
-                // اللاعب انقطع — عدّه كـ joined عشان ما نعلق
+                // اللاعب انقطع — عدّه عشان ما نعلق
                 onAllJoined();
                 return;
             }
-            socket.join(room.id, onAllJoined);
             socket.data.roomId = room.id;
-            console.log(`Player ${player.username} joining socket room ${room.id}`);
+            socket.join(room.id, onAllJoined);
         });
 
-        // ─── ربط الأدمن إن وجد ───
         if (adminId) {
             const adminSocket = io.sockets.sockets.get(adminId);
             if (adminSocket) {
-                adminSocket.join(room.id, onAllJoined);
                 adminSocket.data.roomId = room.id;
-                room.engine.adminId = adminId;
-                console.log("Admin attached to room:", room.id);
+                room.engine.adminId    = adminId;
+                adminSocket.join(room.id, onAllJoined);
             } else {
-                // الأدمن غير متصل — عدّه كـ joined
                 onAllJoined();
             }
         }
 
-        // ─── Fallback: لو الـ callback ما اشتغل خلال 3 ثواني (socket.join قديم لا يدعم callback) ───
-        setTimeout(() => {
-            if (joinedCount < totalExpected && !room.engine.gameStarted) {
-                console.warn(`Fallback: starting game after timeout (joined ${joinedCount}/${totalExpected})`);
+        // ─── Fallback: لو socket.join لا يدعم callback في هذا الإصدار ────
+        // (Socket.io v4 يدعمه، لكن كـ safety net)
+        const fallbackTimer = setTimeout(() => {
+            if (!room.engine.gameStarted) {
+                logger.warn("MATCH", "Fallback: starting game via timeout", { roomId: room.id });
                 room.engine.startGame();
             }
         }, 3000);
+
+        // إلغاء الـ fallback لو اللعبة بدأت بشكل طبيعي
+        const originalStartGame = room.engine.startGame.bind(room.engine);
+        room.engine.startGame = function () {
+            clearTimeout(fallbackTimer);
+            room.engine.startGame = originalStartGame;
+            originalStartGame();
+        };
 
         return room;
     }
