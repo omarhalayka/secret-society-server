@@ -253,9 +253,12 @@ class GameEngine {
             this._emitRoleError(playerId, "mafia_error", ERROR_TYPES.INVALID_TARGET, "لا يمكنك استهداف أحد أفراد المافيا");
             return;
         }
+        console.log("Last Mafia Target:", this.lastMafiaTarget);
+        console.log("New Target:", targetId);
         if (this.lastMafiaTarget === targetId) {
-            this._emitRoleError(playerId, "mafia_error", ERROR_TYPES.REPEAT_TARGET, "لا يمكنك استهداف نفس اللاعب ليلتين متتاليتين");
-            return;
+            const error = { error: "MAFIA_REPEAT_TARGET" };
+            this._emitRoleError(playerId, "mafia_error", ERROR_TYPES.MAFIA_REPEAT_TARGET, "لا يمكنك استهداف نفس اللاعب ليلتين متتاليتين", error);
+            return error;
         }
 
         this.nightActions.mafiaTarget = targetId;
@@ -293,9 +296,12 @@ class GameEngine {
             this._emitRoleError(playerId, "doctor_error", ERROR_TYPES.SELF_TARGET, "لا يمكنك حماية نفسك");
             return;
         }
+        console.log("Last Doctor Target:", this.lastDoctorTarget);
+        console.log("New Target:", targetId);
         if (this.lastDoctorTarget === targetId) {
-            this._emitRoleError(playerId, "doctor_error", ERROR_TYPES.REPEAT_TARGET, "لا يمكنك حماية نفس اللاعب ليلتين متتاليتين");
-            return;
+            const error = { error: "DOCTOR_REPEAT_TARGET" };
+            this._emitRoleError(playerId, "doctor_error", ERROR_TYPES.DOCTOR_REPEAT_TARGET, "لا يمكنك حماية نفس اللاعب ليلتين متتاليتين", error);
+            return error;
         }
 
         this.nightActions.doctorSave = targetId;

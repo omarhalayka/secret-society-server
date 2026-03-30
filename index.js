@@ -2,34 +2,34 @@
 // النسخة النهائية: production-ready
 require("dotenv").config();
 
-const express        = require("express");
-const http           = require("http");
-const { Server }     = require("socket.io");
-const cors           = require("cors");
+const express = require("express");
+const http = require("http");
+const { Server } = require("socket.io");
+const cors = require("cors");
 
-const lobbyManager       = require("./src/core/lobbyManager");
+const lobbyManager = require("./src/core/lobbyManager");
 const matchmakingManager = require("./src/core/matchmakingManager");
-const roomManager        = require("./src/core/roomManager");
-const socketHandler      = require("./src/websocket/socketHandler");
-const logger             = require("./src/utils/logger");
-const rateLimiter        = require("./src/utils/rateLimit");
-const validate           = require("./src/utils/validate");
+const roomManager = require("./src/core/roomManager");
+const socketHandler = require("./src/websocket/socketHandler");
+const logger = require("./src/utils/logger");
+const rateLimiter = require("./src/utils/rateLimit");
+const validate = require("./src/utils/validate");
 const { emitError, ERROR_TYPES } = require("./src/utils/errors");
 
 // ─── Express + HTTP + Socket.io ──────────────────────────────────────────────
-const app    = express();
+const app = express();
 const server = http.createServer(app);
 
 const CLIENT_URL = process.env.CLIENT_URL || "*";
 
 const io = new Server(server, {
     cors: {
-        origin:  CLIENT_URL,
+        origin: CLIENT_URL,
         methods: ["GET", "POST"],
     },
-    pingTimeout:  60000,
+    pingTimeout: 60000,
     pingInterval: 25000,
-    transports:   ["websocket", "polling"],
+    transports: ["websocket", "polling"],
     maxHttpBufferSize: 1e5, // 100KB — يمنع payloads ضخمة
 });
 
@@ -37,19 +37,19 @@ app.use(cors({ origin: CLIENT_URL }));
 app.use(express.json({ limit: "10kb" }));
 
 // ─── HTTP Endpoints ───────────────────────────────────────────────────────────
-app.get("/",       (_, res) => res.send("Secret Society Server ✅"));
+app.get("/", (_, res) => res.send("Secret Society Server ✅"));
 app.get("/health", (_, res) => res.json({
     status: "ok",
     uptime: Math.floor(process.uptime()),
-    rooms:  roomManager.getAllRooms().length,
-    queue:  matchmakingManager.getQueueSize(),
+    rooms: roomManager.getAllRooms().length,
+    queue: matchmakingManager.getQueueSize(),
 }));
 
 // ─── حالة الجلسة ─────────────────────────────────────────────────────────────
 // sessionPassword: كلمة سر يحددها الأدمن للسماح للاعبين بالدخول
 // rejoinCodes:     Map<code, { roomId, role, expiresAt }>
 global.sessionPassword = null;
-global.rejoinCodes     = new Map();
+global.rejoinCodes = new Map();
 
 // تنظيف الأكواد المنتهية كل دقيقة
 setInterval(() => {
@@ -109,20 +109,20 @@ io.on("connection", (socket) => {
     // ADMIN
     // =========================================================================
     socket.on("join_admin", () => {
-        socket.data.type    = "ADMIN";
+        socket.data.type = "ADMIN";
         socket.data.isAdmin = true;
 
         const room = findActiveRoom();
         if (room?.engine) {
             socket.join(room.id);
-            socket.data.roomId  = room.id;
+            socket.data.roomId = room.id;
             room.engine.adminId = socket.id;
 
             socket.emit("game_started", { roomId: room.id, role: "ADMIN" });
             socket.emit("room_state", {
                 players: room.players,
-                phase:   room.engine.phase,
-                round:   room.engine.round,
+                phase: room.engine.phase,
+                round: room.engine.round,
             });
         } else {
             socket.emit("game_started", { roomId: null, role: "ADMIN" });
@@ -143,7 +143,7 @@ io.on("connection", (socket) => {
         const cleaned = validate.password(password);
         global.sessionPassword = cleaned;
         logger.info("AUTH", `Session password ${cleaned ? "set" : "cleared"}`);
-        io.emit("session_password_set",   { password: global.sessionPassword });
+        io.emit("session_password_set", { password: global.sessionPassword });
         io.emit("session_password_ready", { ready: !!global.sessionPassword });
     });
 
@@ -186,7 +186,7 @@ io.on("connection", (socket) => {
 
         if (!room) {
             const queueSize = matchmakingManager.getQueueSize();
-            const required  = matchmakingManager.requiredPlayers;
+            const required = matchmakingManager.requiredPlayers;
             // أبلغ الكل بتحديث الـ queue
             io.emit("queue_update", { queueSize, required });
         }
@@ -195,7 +195,7 @@ io.on("connection", (socket) => {
     socket.on("request_queue_status", () => {
         socket.emit("queue_update", {
             queueSize: matchmakingManager.getQueueSize(),
-            required:  matchmakingManager.requiredPlayers,
+            required: matchmakingManager.requiredPlayers,
         });
     });
 
@@ -213,7 +213,7 @@ io.on("connection", (socket) => {
             return;
         }
 
-        socket.data.type   = "SPECTATOR";
+        socket.data.type = "SPECTATOR";
         socket.data.roomId = room.id;
         socket.join(room.id);
 
@@ -304,13 +304,13 @@ io.on("connection", (socket) => {
         const roomId = socket.data.roomId;
         if (!roomId) return;
 
-        const room   = roomManager.getRoom(roomId);
-        if (!room)   return;
+        const room = roomManager.getRoom(roomId);
+        if (!room) return;
 
-        const player   = room.players.find(p => p.id === socket.id);
-        const isAdmin  = socket.data.isAdmin;
+        const player = room.players.find(p => p.id === socket.id);
+        const isAdmin = socket.data.isAdmin;
         const username = isAdmin ? "ADMIN 👑" : (player?.username || "Unknown");
-        const alive    = isAdmin ? true : (player?.alive ?? true);
+        const alive = isAdmin ? true : (player?.alive ?? true);
 
         io.to(roomId).emit("receive_message", { username, message: msg, alive });
     });
@@ -333,7 +333,7 @@ io.on("connection", (socket) => {
             .filter(p => p.role === "MAFIA")
             .forEach(m => {
                 io.to(m.id).emit("mafia_chat_message", {
-                    from:    player.username,
+                    from: player.username,
                     message: msg,
                 });
             });
@@ -417,7 +417,7 @@ io.on("connection", (socket) => {
 
         roomManager.getAllRooms().forEach(r => roomManager.removeRoom(r.id));
         matchmakingManager.queue = [];
-        global.sessionPassword   = null;
+        global.sessionPassword = null;
         global.rejoinCodes.clear();
 
         io.emit("server_reset");
@@ -442,7 +442,7 @@ io.on("connection", (socket) => {
             return;
         }
 
-        const code      = String(Math.floor(100000 + Math.random() * 900000));
+        const code = String(Math.floor(100000 + Math.random() * 900000));
         const expiresAt = Date.now() + 15 * 60 * 1000;
 
         global.rejoinCodes.set(code, { roomId: room.id, role: validRole, expiresAt });
@@ -461,7 +461,7 @@ io.on("connection", (socket) => {
         const cleanName = validate.username(username);
 
         if (!cleanCode) { emitError(socket, ERROR_TYPES.INVALID_INPUT, "كود غير صالح"); return; }
-        if (!cleanName) { emitError(socket, ERROR_TYPES.INVALID_INPUT, "اسم غير صالح");  return; }
+        if (!cleanName) { emitError(socket, ERROR_TYPES.INVALID_INPUT, "اسم غير صالح"); return; }
 
         const entry = global.rejoinCodes.get(cleanCode);
         if (!entry || entry.expiresAt < Date.now()) {
@@ -478,19 +478,19 @@ io.on("connection", (socket) => {
 
         // أنشئ اللاعب بالدور المحدد من الأدمن
         const newPlayer = {
-            id:       socket.id,
+            id: socket.id,
             username: cleanName,
-            role:     entry.role,
-            alive:    true,
-            avatar:   "😎",
-            color:    "#1e293b",
+            role: entry.role,
+            alive: true,
+            avatar: "😎",
+            color: "#1e293b",
         };
         room.players.push(newPlayer);
         lobbyManager.updateUsername(socket.id, cleanName);
 
         socket.join(entry.roomId);
         socket.data.roomId = entry.roomId;
-        socket.data.type   = "PLAYER";
+        socket.data.type = "PLAYER";
 
         // الكود يُستخدم مرة واحدة فقط
         global.rejoinCodes.delete(cleanCode);
@@ -508,8 +508,8 @@ io.on("connection", (socket) => {
         if (!rateLimiter.events.REJOIN(socket.id)) return;
 
         const cleanRoomId = validate.roomId(roomId);
-        const cleanName   = validate.username(username);
-        const cleanRole   = validate.role(role);
+        const cleanName = validate.username(username);
+        const cleanRole = validate.role(role);
 
         if (!cleanRoomId || !cleanName || !cleanRole) {
             socket.emit("rejoin_failed");
@@ -526,11 +526,11 @@ io.on("connection", (socket) => {
         if (!player) { socket.emit("rejoin_failed"); return; }
 
         const oldId = player.id;
-        player.id   = socket.id;
+        player.id = socket.id;
 
         socket.join(cleanRoomId);
         socket.data.roomId = cleanRoomId;
-        socket.data.type   = "PLAYER";
+        socket.data.type = "PLAYER";
         lobbyManager.updateUsername(socket.id, cleanName);
 
         // أبلغ الغرفة بتغيير الـ socket ID (مهم للـ voice)
@@ -566,7 +566,7 @@ io.on("connection", (socket) => {
         socket.to(socket.data.roomId).emit("voice_peer_joined", {
             peerId,
             username: player?.username,
-            role:     player?.role,
+            role: player?.role,
         });
 
         logger.debug("VOICE", `Peer registered`, { username: player?.username });
@@ -599,7 +599,7 @@ io.on("connection", (socket) => {
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
     logger.info("SERVER", `Started on port ${PORT}`, {
-        env:    process.env.NODE_ENV || "development",
+        env: process.env.NODE_ENV || "development",
         client: CLIENT_URL,
     });
 });
