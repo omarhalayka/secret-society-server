@@ -253,7 +253,25 @@ io.on("connection", (socket) => {
         if (!tid) { emitError(socket, ERROR_TYPES.INVALID_INPUT, "هدف غير صالح"); return; }
 
         const room = getRoomForSocket(socket);
-        room?.engine?.registerMafiaKill(socket.id, tid);
+        console.log("[Socket] mafia_kill received", {
+            socketId: socket.id,
+            roomId: socket.data.roomId,
+            targetId: tid,
+            hasRoom: !!room,
+            engineInstanceId: room?.engine?.instanceId || null,
+            phase: room?.engine?.phase || null,
+            round: room?.engine?.round || null,
+            lastMafiaTarget: room?.engine?.lastMafiaTarget || null,
+        });
+        const result = room?.engine?.registerMafiaKill(socket.id, tid);
+        console.log("[Socket] mafia_kill result", {
+            socketId: socket.id,
+            roomId: socket.data.roomId,
+            engineInstanceId: room?.engine?.instanceId || null,
+            result: result || null,
+            currentNightTarget: room?.engine?.nightActions?.mafiaTarget || null,
+            lastMafiaTarget: room?.engine?.lastMafiaTarget || null,
+        });
     });
 
     socket.on("doctor_save", (targetId) => {
@@ -265,7 +283,25 @@ io.on("connection", (socket) => {
         if (!tid) { emitError(socket, ERROR_TYPES.INVALID_INPUT, "هدف غير صالح"); return; }
 
         const room = getRoomForSocket(socket);
-        room?.engine?.registerDoctorSave(socket.id, tid);
+        console.log("[Socket] doctor_save received", {
+            socketId: socket.id,
+            roomId: socket.data.roomId,
+            targetId: tid,
+            hasRoom: !!room,
+            engineInstanceId: room?.engine?.instanceId || null,
+            phase: room?.engine?.phase || null,
+            round: room?.engine?.round || null,
+            lastDoctorTarget: room?.engine?.lastDoctorTarget || null,
+        });
+        const result = room?.engine?.registerDoctorSave(socket.id, tid);
+        console.log("[Socket] doctor_save result", {
+            socketId: socket.id,
+            roomId: socket.data.roomId,
+            engineInstanceId: room?.engine?.instanceId || null,
+            result: result || null,
+            currentNightTarget: room?.engine?.nightActions?.doctorSave || null,
+            lastDoctorTarget: room?.engine?.lastDoctorTarget || null,
+        });
     });
 
     socket.on("detective_check", (targetId) => {
