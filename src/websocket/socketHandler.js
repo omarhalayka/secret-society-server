@@ -1,5 +1,5 @@
 // src/websocket/socketHandler.js
-// يُعالج فقط request_room_state — يُنادى من index.js
+// يعالج request_room_state — مع فلترة صارمة للأدوار
 const roomManager = require("../core/roomManager");
 
 module.exports = function socketHandler(io, socket) {
@@ -11,19 +11,31 @@ module.exports = function socketHandler(io, socket) {
     const myPlayer    = room.players.find(p => p.id === socket.id);
 
     const filteredPlayers = room.players.map(p => {
-        // الأدمن يرى كل الأدوار
+        // ─── الأدمن: يرى كل الأدوار ──────────────────────────────────────
         if (isAdmin) {
             return { ...p };
         }
-        // المشاهد لا يرى أي دور
+
+        // ─── المشاهد: لا يرى أي دور إطلاقاً ─────────────────────────────
+        // حتى الميتين — المشاهد يشاهد فقط الأسماء والحياة
         if (isSpectator) {
-            return { id: p.id, username: p.username, alive: p.alive, avatar: p.avatar, color: p.color, role: null };
+            return {
+                id:       p.id,
+                username: p.username,
+                alive:    p.alive,
+                avatar:   p.avatar  || "😎",
+                color:    p.color   || "#1e293b",
+                role:     null,  // ✅ لا يُرسل الدور للمشاهد أبداً
+            };
         }
-        // اللاعب يرى دوره فقط + زملاء المافيا
+
+        // ─── اللاعب العادي ────────────────────────────────────────────────
         const showRole =
-            p.id === socket.id ||                             // نفسه
-            !p.alive ||                                       // ميت — الكل يعرف دوره
+            p.id === socket.id ||                              // نفسه دائماً
             (myPlayer?.role === "MAFIA" && p.role === "MAFIA"); // المافيا تعرف بعضها
+
+        // ملاحظة: الميتون لا يُكشف دورهم هنا — يُكشف فقط عند game_over
+        // هذا يمنع الغش عبر room_state
 
         return {
             id:       p.id,
