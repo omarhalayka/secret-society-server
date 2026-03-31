@@ -33,9 +33,8 @@ class GameEngine {
 
         this.votes = {};
 
-        // ─── Repeat-target tracking (تستمر بين الليالي، تُمسح عند resetGame فقط) ───
-        this.lastDoctorTarget = null;  // آخر لاعب حماه الطبيب
-        this.lastMafiaTarget  = null;  // آخر لاعب استهدفته المافيا
+        this.lastDoctorTarget = null;
+        this.lastMafiaTarget  = null;
 
         this.nightActions = {
             mafiaTarget:     null,
@@ -70,8 +69,6 @@ class GameEngine {
         });
     }
 
-    // ─── Helpers ──────────────────────────────────────────────────────────────
-
     broadcast(event, data) {
         this.io.to(this.roomId).emit(event, data);
     }
@@ -100,7 +97,6 @@ class GameEngine {
         return this.phase === required;
     }
 
-    // ─── Public players (بدون أدوار) ─────────────────────────────────────────
     _getPublicPlayers() {
         return this.players.map((p) => ({
             id:       p.id,
@@ -108,7 +104,7 @@ class GameEngine {
             alive:    p.alive,
             avatar:   p.avatar || "😎",
             color:    p.color  || "#1e293b",
-            role:     null,  // لا يُرسل الدور للعموم
+            role:     null,
         }));
     }
 
@@ -120,7 +116,6 @@ class GameEngine {
         this.spectators = this.spectators.filter((id) => id !== socketId);
     }
 
-    // ─── Reset ────────────────────────────────────────────────────────────────
     resetGame() {
         console.log("[GameEngine] resetGame — clearing all state including lastTargets", {
             roomId:            this.roomId,
@@ -141,7 +136,6 @@ class GameEngine {
         this.votes       = {};
         this.chatEnabled = true;
 
-        // ✅ نمسحهم عند reset اللعبة الكاملة
         this.lastDoctorTarget = null;
         this.lastMafiaTarget  = null;
 
@@ -173,7 +167,6 @@ class GameEngine {
         this.broadcast("back_to_lobby", {});
     }
 
-    // ─── Start Game ───────────────────────────────────────────────────────────
     startGame() {
         console.log("[GameEngine] startGame", {
             roomId:     this.roomId,
@@ -220,11 +213,9 @@ class GameEngine {
         }, 2000);
     }
 
-    // ─── Assign Roles ─────────────────────────────────────────────────────────
     assignRoles() {
         const count = this.players.length;
 
-        // Fisher-Yates shuffle
         for (let i = count - 1; i > 0; i--) {
             const j = Math.floor(Math.random() * (i + 1));
             [this.players[i], this.players[j]] = [this.players[j], this.players[i]];
@@ -250,7 +241,6 @@ class GameEngine {
         });
     }
 
-    // ─── Night Phase ──────────────────────────────────────────────────────────
     startNight() {
         if (this.gameOver) return;
 
@@ -258,13 +248,12 @@ class GameEngine {
             roomId:           this.roomId,
             instanceId:       this.instanceId,
             round:            this.round,
-            lastMafiaTarget:  this.lastMafiaTarget,   // ✅ يبقى من الليلة السابقة
-            lastDoctorTarget: this.lastDoctorTarget,  // ✅ يبقى من الليلة السابقة
+            lastMafiaTarget:  this.lastMafiaTarget,
+            lastDoctorTarget: this.lastDoctorTarget,
         });
 
         this.phase = this.PHASES.NIGHT;
 
-        // ✅ نمسح nightActions فقط (ليس lastTarget) — هذا هو الفرق المهم
         this.nightActions = { mafiaTarget: null, doctorSave: null, detectiveChecks: [] };
         this.nightActionStatus = {
             mafia:     { done: false, username: null },
@@ -276,30 +265,26 @@ class GameEngine {
         logger.phase(this.phase, this.round, this.roomId);
         this.broadcast("phase_changed", { phase: this.phase, round: this.round });
 
-        // ─── إرسال قائمة اللاعبين الأحياء لكل دور ───────────────────────────
         const alivePlayers = this.players.filter((p) => p.alive);
 
-        // المافيا: يشوفون الأحياء من غير المافيا
         const mafiaTargets = alivePlayers.filter((p) => p.role !== "MAFIA");
         this.players
             .filter((p) => p.role === "MAFIA")
             .forEach((m) => {
                 this._emitToPlayer(m.id, "night_targets", {
                     players: mafiaTargets.map((p) => ({ id: p.id, username: p.username })),
-                    lastTarget: this.lastMafiaTarget,  // ✅ يُرسل للعميل ليعرف المقيّد
+                    lastTarget: this.lastMafiaTarget,
                 });
             });
 
-        // الطبيب: يشوف الأحياء (بما فيه نفسه — سيُمنع من الخادم)
         const doctorPlayer = this.players.find((p) => p.role === "DOCTOR" && p.alive);
         if (doctorPlayer) {
             this._emitToPlayer(doctorPlayer.id, "night_targets", {
                 players:    alivePlayers.map((p) => ({ id: p.id, username: p.username })),
-                lastTarget: this.lastDoctorTarget,  // ✅ يُرسل للعميل
+                lastTarget: this.lastDoctorTarget,
             });
         }
 
-        // المحقق: يشوف الأحياء غيره
         const detectivePlayer = this.players.find((p) => p.role === "DETECTIVE" && p.alive);
         if (detectivePlayer) {
             this._emitToPlayer(detectivePlayer.id, "night_targets", {
@@ -311,7 +296,6 @@ class GameEngine {
         }
     }
 
-    // ─── Mafia Kill ───────────────────────────────────────────────────────────
     registerMafiaKill(playerId, targetId) {
         const player = this._getAlivePlayer(playerId);
 
@@ -322,7 +306,7 @@ class GameEngine {
             round:            this.round,
             playerId,
             targetId,
-            lastMafiaTarget:  this.lastMafiaTarget,   // ← الليلة السابقة
+            lastMafiaTarget:  this.lastMafiaTarget,
             currentTarget:    this.nightActions.mafiaTarget,
         });
 
@@ -349,7 +333,6 @@ class GameEngine {
             return { rejected: true, reason: ERROR_TYPES.INVALID_TARGET };
         }
 
-        // ✅ فحص التكرار — الأهم
         console.log("[Repeat-Check] Mafia | Last:", this.lastMafiaTarget, "| New:", targetId);
         if (this.lastMafiaTarget !== null && this.lastMafiaTarget === targetId) {
             this._emitRoleError(playerId, "mafia_error", ERROR_TYPES.MAFIA_REPEAT_TARGET,
@@ -358,11 +341,9 @@ class GameEngine {
             return { rejected: true, reason: ERROR_TYPES.MAFIA_REPEAT_TARGET, error: "MAFIA_REPEAT_TARGET" };
         }
 
-        // ✅ قبول الإجراء
         this.nightActions.mafiaTarget = targetId;
         logger.kill(player.username, target.username, this.round);
 
-        // إبلاغ بقية المافيا باقتراح الهدف
         this.players
             .filter((p) => p.role === "MAFIA" && p.alive && p.id !== playerId)
             .forEach((m) => {
@@ -393,7 +374,6 @@ class GameEngine {
         return { ok: true, targetId };
     }
 
-    // ─── Doctor Save ──────────────────────────────────────────────────────────
     registerDoctorSave(playerId, targetId) {
         const player = this._getAlivePlayer(playerId);
 
@@ -404,7 +384,7 @@ class GameEngine {
             round:            this.round,
             playerId,
             targetId,
-            lastDoctorTarget: this.lastDoctorTarget,  // ← الليلة السابقة
+            lastDoctorTarget: this.lastDoctorTarget,
             currentTarget:    this.nightActions.doctorSave,
         });
 
@@ -425,14 +405,12 @@ class GameEngine {
             return { rejected: true, reason: ERROR_TYPES.INVALID_TARGET };
         }
 
-        // ✅ منع الطبيب من حماية نفسه
         if (playerId === targetId) {
             this._emitRoleError(playerId, "doctor_error", ERROR_TYPES.SELF_TARGET,
                 "لا يمكنك حماية نفسك");
             return { rejected: true, reason: ERROR_TYPES.SELF_TARGET };
         }
 
-        // ✅ فحص التكرار — الأهم
         console.log("[Repeat-Check] Doctor | Last:", this.lastDoctorTarget, "| New:", targetId);
         if (this.lastDoctorTarget !== null && this.lastDoctorTarget === targetId) {
             this._emitRoleError(playerId, "doctor_error", ERROR_TYPES.DOCTOR_REPEAT_TARGET,
@@ -441,7 +419,6 @@ class GameEngine {
             return { rejected: true, reason: ERROR_TYPES.DOCTOR_REPEAT_TARGET, error: "DOCTOR_REPEAT_TARGET" };
         }
 
-        // ✅ قبول الإجراء
         this.nightActions.doctorSave = targetId;
         logger.save(player.username, target.username, this.round);
 
@@ -465,7 +442,6 @@ class GameEngine {
         return { ok: true, targetId };
     }
 
-    // ─── Detective Check ──────────────────────────────────────────────────────
     registerDetectiveCheck(playerId, targetId) {
         const player = this._getAlivePlayer(playerId);
         if (!player || player.role !== "DETECTIVE") return;
@@ -489,7 +465,6 @@ class GameEngine {
             return;
         }
 
-        // المحقق يعرف فقط: مافيا أم لا
         const result = target.role === "MAFIA" ? "MAFIA" : "NOT MAFIA";
 
         this.nightActions.detectiveChecks.push({
@@ -510,7 +485,6 @@ class GameEngine {
         this._sendNightStatusToAdmin();
     }
 
-    // ─── End Night ────────────────────────────────────────────────────────────
     endNight() {
         if (this.gameOver) return;
 
@@ -522,7 +496,6 @@ class GameEngine {
         const { mafiaTarget, doctorSave, detectiveChecks } = this.nightActions;
         const finalVictim = (mafiaTarget && mafiaTarget !== doctorSave) ? mafiaTarget : null;
 
-        // ✅ تحديث lastTarget هنا فقط — بعد انتهاء الليل (وليس أثناءه)
         if (mafiaTarget)  {
             this.lastMafiaTarget = mafiaTarget;
             console.log("[Persist] lastMafiaTarget updated to:", this.lastMafiaTarget);
@@ -566,7 +539,6 @@ class GameEngine {
         });
     }
 
-    // ─── Execute Night Results ────────────────────────────────────────────────
     executeNightResults() {
         const { finalVictim, mafiaTarget, doctorSave } = this.nightResults;
 
@@ -604,7 +576,6 @@ class GameEngine {
             }
         }
 
-        // مسح nightResults بعد التنفيذ
         this.nightResults = {
             mafiaTarget:     null,
             doctorSave:      null,
@@ -613,7 +584,6 @@ class GameEngine {
         };
     }
 
-    // ─── Day Phase ────────────────────────────────────────────────────────────
     startDay() {
         if (this.gameOver) return;
 
@@ -632,7 +602,6 @@ class GameEngine {
         this.broadcast("phase_changed", { phase: this.phase, round: this.round });
     }
 
-    // ─── Voting ───────────────────────────────────────────────────────────────
     startVoting() {
         if (this.gameOver) return;
 
@@ -740,7 +709,6 @@ class GameEngine {
         }, 4000);
     }
 
-    // ─── Win Condition ────────────────────────────────────────────────────────
     checkWinCondition() {
         const activePlayers  = this.players.filter((p) => GAME_ROLES.has(p.role));
         const mafiaAlive     = activePlayers.filter((p) => p.role === "MAFIA" && p.alive).length;
