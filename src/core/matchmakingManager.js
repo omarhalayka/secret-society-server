@@ -42,6 +42,24 @@ class MatchmakingManager {
     createMatch(io) {
         const playersForMatch = this.queue.splice(0, this.requiredPlayers);
 
+        // إزالة أي تكرار في قائمة اللاعبين (قد يحدث بسبب انقطاع غير صحيح)
+        const uniquePlayers = [];
+        const seen = new Set();
+        for (const p of playersForMatch) {
+            if (!seen.has(p.id)) {
+                seen.add(p.id);
+                uniquePlayers.push(p);
+            }
+        }
+        if (uniquePlayers.length !== playersForMatch.length) {
+            logger.warn("MATCH", "Duplicate players in queue removed", { 
+                before: playersForMatch.length, 
+                after: uniquePlayers.length 
+            });
+        }
+        // استخدم القائمة المنظفة
+        const cleanPlayers = uniquePlayers;
+
         // ابحث عن الأدمن المتصل
         let adminId = null;
         io.sockets.sockets.forEach((client) => {
@@ -49,16 +67,16 @@ class MatchmakingManager {
         });
 
         logger.info("MATCH", "Creating match", {
-            players: playersForMatch.map(p => p.username).join(", "),
+            players: cleanPlayers.map(p => p.username).join(", "),
             adminId: adminId ? "yes" : "none",
         });
 
-        const room = roomManager.createRoom(playersForMatch, io, adminId);
+        const room = roomManager.createRoom(cleanPlayers, io, adminId);
 
         // ─── ربط الـ sockets بالغرفة ─────────────────────────────────────
         // نستخدم Promise.all مع callback لضمان اكتمال الـ join قبل startGame
         let joinedCount      = 0;
-        const allSockets     = [...playersForMatch.map(p => p.id)];
+        const allSockets     = [...cleanPlayers.map(p => p.id)];
         if (adminId) allSockets.push(adminId);
         const totalExpected  = allSockets.length;
 
@@ -70,7 +88,7 @@ class MatchmakingManager {
             }
         };
 
-        playersForMatch.forEach(player => {
+        cleanPlayers.forEach(player => {
             const socket = io.sockets.sockets.get(player.id);
             if (!socket) {
                 // اللاعب انقطع — عدّه عشان ما نعلق

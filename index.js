@@ -622,9 +622,18 @@ io.on("connection", (socket) => {
         if (roomId) {
             socket.to(roomId).emit("player_disconnected", { id: socket.id });
 
-            // إزالة الـ spectator من الغرفة
+            // إزالة اللاعب من الغرفة إذا كان موجوداً
             const room = roomManager.getRoom(roomId);
             if (room) {
+                // إزالة من قائمة اللاعبين
+                const beforePlayers = room.players.length;
+                room.players = room.players.filter(p => p.id !== socket.id);
+                if (room.players.length < beforePlayers) {
+                    logger.info("DISCONNECT", `Player removed from room players`, {
+                        roomId, socketId: socket.id, remaining: room.players.length
+                    });
+                }
+                // إزالة من المشاهدين
                 room.spectators = (room.spectators || []).filter(id => id !== socket.id);
             }
         }
