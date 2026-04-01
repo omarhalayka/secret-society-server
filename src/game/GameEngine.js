@@ -9,8 +9,7 @@ class GameEngine {
     constructor(players, io, roomId, adminId = null) {
         GameEngine._instanceCounter = (GameEngine._instanceCounter || 0) + 1;
         this.instanceId = `engine-${GameEngine._instanceCounter}`;
-        // players now have playerId, socketId, connected, etc.
-        this.players = players; // array of objects with playerId, socketId, ...
+        this.players = players;
         this.io = io;
         this.roomId = roomId;
         this.adminId = adminId;
@@ -32,16 +31,15 @@ class GameEngine {
         this.chatEnabled = true;
         this._pendingTimer = null;
 
-        this.votes = {}; // { playerId: targetPlayerId }
+        this.votes = {};
 
-        // last targets stored by playerId (stable)
         this.lastDoctorTargetPlayerId = null;
         this.lastMafiaTargetPlayerId  = null;
 
         this.nightActions = {
             mafiaTargetPlayerId:     null,
             doctorSavePlayerId:      null,
-            detectiveChecks: [], // each { detectivePlayerId, targetPlayerId, result }
+            detectiveChecks: [],
         };
 
         this.nightActionStatus = {
@@ -79,7 +77,6 @@ class GameEngine {
         });
     }
 
-    // Helpers
     broadcast(event, data) {
         this.io.to(this.roomId).emit(event, data);
     }
@@ -89,21 +86,18 @@ class GameEngine {
         if (p && p.connected && p.socketId) {
             this.io.to(p.socketId).emit(event, data);
         } else {
-            // Player not connected – maybe log
             logger.debug("GAME", `Cannot emit to player ${playerId}, not connected`);
         }
     }
 
     _emitRoleError(playerId, event, type, message, extra = {}) {
         this._emitToPlayer(playerId, event, { type, message, ...extra });
-        // Also send via generic error channel
         const socket = this.io.sockets.sockets.get(this._playerIdToPlayer.get(playerId)?.socketId);
         if (socket) emitError(socket, type, message, extra);
     }
 
     _sendNightStatusToAdmin() {
         if (!this.adminId) return;
-        // adminId is socketId, but we need to find playerId? Admin may not have playerId if not a player. We'll keep as socketId for now.
         this.io.to(this.adminId).emit("night_action_status", this.nightActionStatus);
     }
 
@@ -120,7 +114,7 @@ class GameEngine {
     _getPublicPlayers() {
         return this.players.map((p) => ({
             playerId:  p.playerId,
-            socketId:  p.socketId, // not needed for client maybe
+            socketId:  p.socketId,
             username:  p.username,
             alive:     p.alive,
             avatar:    p.avatar || "😎",
@@ -129,12 +123,10 @@ class GameEngine {
         }));
     }
 
-    // For compatibility, we keep a method to get player by socketId (used in events)
     _getPlayerBySocketId(socketId) {
         return this._socketToPlayer.get(socketId) || null;
     }
 
-    // Called when a player reconnects (socketId changes)
     updateSocketId(oldSocketId, newSocketId) {
         const player = this._socketToPlayer.get(oldSocketId);
         if (player) {
@@ -317,11 +309,13 @@ class GameEngine {
             });
         }
 
-        // Doctor
+        // Doctor (exclude self)
         const doctorPlayer = this.players.find((p) => p.role === "DOCTOR" && p.alive);
         if (doctorPlayer) {
             this._emitToPlayer(doctorPlayer.playerId, "night_targets", {
-                players: alivePlayers.map((p) => ({ id: p.socketId, username: p.username, playerId: p.playerId })),
+                players: alivePlayers
+                    .filter((p) => p.playerId !== doctorPlayer.playerId)
+                    .map((p) => ({ id: p.socketId, username: p.username, playerId: p.playerId })),
                 lastTarget: this.lastDoctorTargetPlayerId,
             });
         }
@@ -338,7 +332,6 @@ class GameEngine {
         }
     }
 
-    // Accept target as socketId (client sends socketId), convert to playerId internally
     registerMafiaKill(socketId, targetSocketId) {
         const player = this._getPlayerBySocketId(socketId);
         if (!player || player.role !== "MAFIA" || !player.alive) {
@@ -351,7 +344,6 @@ class GameEngine {
             return { rejected: true, reason: ERROR_TYPES.WRONG_PHASE };
         }
 
-        // Server-enforce one action per night
         if (this.nightActionStatus.mafia.done) {
             this._emitRoleError(player.playerId, "mafia_error", ERROR_TYPES.ACTION_USED,
                 "لقد قمت بتحديد هدف بالفعل هذه الليلة");
@@ -379,12 +371,10 @@ class GameEngine {
             return { rejected: true, reason: ERROR_TYPES.MAFIA_REPEAT_TARGET };
         }
 
-        // Accept action
         this.nightActions.mafiaTargetPlayerId = target.playerId;
         this.nightActionStatus.mafia = { done: true, playerId: player.playerId };
         logger.kill(player.username, target.username, this.round);
 
-        // Notify other mafia members of the suggestion
         this.players
             .filter((p) => p.role === "MAFIA" && p.alive && p.playerId !== player.playerId)
             .forEach((m) => {
@@ -573,7 +563,6 @@ class GameEngine {
         logger.phase(this.phase, this.round, this.roomId);
 
         if (this.adminId) {
-            // For admin, we need to send results in a format they understand (maybe include usernames)
             const resultForAdmin = {
                 mafiaTarget: this.players.find(p => p.playerId === mafiaTargetPlayerId)?.username || null,
                 doctorSave:  this.players.find(p => p.playerId === doctorSavePlayerId)?.username || null,
@@ -597,7 +586,7 @@ class GameEngine {
         let doctorSavePlayerId  = this.nightResults.doctorSavePlayerId;
         let finalVictimPlayerId = this.nightResults.finalVictimPlayerId;
 
-        // If nightResults empty, fallback to nightActions (for admin reveal)
+        // Fallback: if nightResults empty, use nightActions
         if (!mafiaTargetPlayerId && this.nightActions.mafiaTargetPlayerId) {
             mafiaTargetPlayerId = this.nightActions.mafiaTargetPlayerId;
         }
@@ -608,9 +597,15 @@ class GameEngine {
             finalVictimPlayerId = mafiaTargetPlayerId;
         }
 
-        // Update last targets (to be safe)
-        if (mafiaTargetPlayerId)  this.lastMafiaTargetPlayerId = mafiaTargetPlayerId;
-        if (doctorSavePlayerId)   this.lastDoctorTargetPlayerId = doctorSavePlayerId;
+        // Update last targets
+        if (mafiaTargetPlayerId) {
+            this.lastMafiaTargetPlayerId = mafiaTargetPlayerId;
+            console.log("[Persist] lastMafiaTargetPlayerId updated in executeNightResults:", this.lastMafiaTargetPlayerId);
+        }
+        if (doctorSavePlayerId) {
+            this.lastDoctorTargetPlayerId = doctorSavePlayerId;
+            console.log("[Persist] lastDoctorTargetPlayerId updated in executeNightResults:", this.lastDoctorTargetPlayerId);
+        }
 
         const mafiaTarget = this._playerIdToPlayer.get(mafiaTargetPlayerId);
         const doctorSave  = this._playerIdToPlayer.get(doctorSavePlayerId);
