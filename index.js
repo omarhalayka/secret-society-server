@@ -61,14 +61,23 @@ setInterval(() => {
 
 // ─── Helper: أول غرفة نشطة ───────────────────────────────────────────────────
 function findActiveRoom() {
-    const rooms = roomManager.getAllRooms();
-    return rooms.length > 0 ? rooms[0] : null;
+    const rooms = roomManager.getAllRooms()
+        .filter((room) => room?.engine)
+        .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+
+    if (!rooms.length) return null;
+
+    return rooms.find((room) => !room.engine.gameOver) || rooms[0];
 }
 
 function getRoomForSocket(socket) {
     return socket.data.roomId
         ? roomManager.getRoom(socket.data.roomId)
         : null;
+}
+
+function emitRoomStateForSocket(socket) {
+    socketHandler(io, socket);
 }
 
 // ─── Socket.io ───────────────────────────────────────────────────────────────
@@ -121,20 +130,7 @@ io.on("connection", (socket) => {
             room.engine.adminId = socket.id;
 
             socket.emit("game_started", { roomId: room.id, role: "ADMIN", playerId: null });
-            socket.emit("room_state", {
-                players: room.players.map(p => ({
-                    id: p.playerId,
-                    playerId: p.playerId,
-                    socketId: p.socketId,
-                    username: p.username,
-                    alive: p.alive,
-                    avatar: p.avatar,
-                    color: p.color,
-                    role: null,
-                })),
-                phase: room.engine.phase,
-                round: room.engine.round,
-            });
+            emitRoomStateForSocket(socket);
         } else {
             socket.emit("game_started", { roomId: null, role: "ADMIN", playerId: null });
         }
@@ -154,7 +150,7 @@ io.on("connection", (socket) => {
         const cleaned = validate.password(password);
         global.sessionPassword = cleaned;
         logger.info("AUTH", `Session password ${cleaned ? "set" : "cleared"}`);
-        io.emit("session_password_set", { password: global.sessionPassword });
+        io.emit("session_password_set", { ready: !!global.sessionPassword });
         io.emit("session_password_ready", { ready: !!global.sessionPassword });
     });
 
@@ -233,22 +229,10 @@ io.on("connection", (socket) => {
 
         room.spectators = room.spectators || [];
         if (!room.spectators.includes(socket.id)) room.spectators.push(socket.id);
+        room.engine.addSpectator(socket.id);
 
         socket.emit("game_started", { roomId: room.id, role: "SPECTATOR", playerId: null });
-        socket.emit("room_state", {
-            players: room.players.map(p => ({
-                id: p.playerId,
-                playerId: p.playerId,
-                socketId: p.socketId,
-                username: p.username,
-                alive: p.alive,
-                avatar: p.avatar,
-                color: p.color,
-                role: null,
-            })),
-            phase: room.engine.phase,
-            round: room.engine.round,
-        });
+        emitRoomStateForSocket(socket);
         socket.to(room.id).emit("spectator_joined", { spectatorId: socket.id });
         logger.info("SPECTATOR", "Joined room", { socketId: socket.id, roomId: room.id });
     });
@@ -259,6 +243,19 @@ io.on("connection", (socket) => {
     socket.on("request_room_state", () => {
         if (!rateLimiter.events.ROOM_STATE(socket.id)) return;
         socketHandler(io, socket);
+    });
+
+    socket.on("request_night_targets", () => {
+        if (!rateLimiter.events.ROOM_STATE(socket.id)) return;
+        const room = getRoomForSocket(socket);
+        if (!room?.engine) return;
+
+        const player = room.players.find((p) =>
+            p.playerId === socket.data.playerId || p.socketId === socket.id
+        );
+
+        if (!player) return;
+        room.engine.sendNightTargetsToPlayer(player.playerId);
     });
 
     // =========================================================================

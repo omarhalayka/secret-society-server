@@ -149,6 +149,55 @@ class GameEngine {
         return player;
     }
 
+    _buildNightTargetsPayload(player) {
+        if (!player || !player.alive || !this._assertPhase(this.PHASES.NIGHT)) {
+            return null;
+        }
+
+        const alivePlayers = this.players.filter((p) => p.alive);
+
+        if (player.role === "MAFIA") {
+            const mafiaPlayers = alivePlayers.filter((p) => p.role === "MAFIA");
+            const mafiaTargets = alivePlayers.filter((p) => p.role !== "MAFIA");
+            return {
+                players:   mafiaTargets.map((p) => this._serializePlayer(p, null)),
+                lastTarget:this.lastMafiaTargetPlayerId,
+                teamCount: mafiaPlayers.length,
+                self:      this._serializePlayer(player, "MAFIA"),
+            };
+        }
+
+        if (player.role === "DOCTOR") {
+            return {
+                players: alivePlayers
+                    .filter((p) => p.playerId !== player.playerId)
+                    .map((p) => this._serializePlayer(p, null)),
+                lastTarget: this.lastDoctorTargetPlayerId,
+                self:       this._serializePlayer(player, "DOCTOR"),
+            };
+        }
+
+        if (player.role === "DETECTIVE") {
+            return {
+                players: alivePlayers
+                    .filter((p) => p.playerId !== player.playerId)
+                    .map((p) => this._serializePlayer(p, null)),
+                lastTarget: null,
+                self:       this._serializePlayer(player, "DETECTIVE"),
+            };
+        }
+
+        return null;
+    }
+
+    sendNightTargetsToPlayer(playerId) {
+        const player = this._playerIdToPlayer.get(playerId);
+        const payload = this._buildNightTargetsPayload(player);
+        if (!player || !payload) return false;
+        this._emitToPlayer(player.playerId, "night_targets", payload);
+        return true;
+    }
+
     _assertPhase(required) {
         return this.phase === required;
     }
@@ -336,42 +385,9 @@ class GameEngine {
 
         logger.phase(this.phase, this.round, this.roomId);
         this.broadcast("phase_changed", { phase: this.phase, round: this.round });
-
-        const alivePlayers = this.players.filter((p) => p.alive);
-
-        // Mafia
-        const mafiaPlayers = this.players.filter((p) => p.role === "MAFIA" && p.alive);
-        if (mafiaPlayers.length > 0) {
-            const mafiaTargets = alivePlayers.filter((p) => p.role !== "MAFIA");
-            mafiaPlayers.forEach((m) => {
-                this._emitToPlayer(m.playerId, "night_targets", {
-                    players: mafiaTargets.map((p) => this._serializePlayer(p, null)),
-                    lastTarget: this.lastMafiaTargetPlayerId,
-                });
-            });
-        }
-
-        // Doctor (exclude self)
-        const doctorPlayer = this.players.find((p) => p.role === "DOCTOR" && p.alive);
-        if (doctorPlayer) {
-            this._emitToPlayer(doctorPlayer.playerId, "night_targets", {
-                players: alivePlayers
-                    .filter((p) => p.playerId !== doctorPlayer.playerId)
-                    .map((p) => this._serializePlayer(p, null)),
-                lastTarget: this.lastDoctorTargetPlayerId,
-            });
-        }
-
-        // Detective
-        const detectivePlayer = this.players.find((p) => p.role === "DETECTIVE" && p.alive);
-        if (detectivePlayer) {
-            this._emitToPlayer(detectivePlayer.playerId, "night_targets", {
-                players: alivePlayers
-                    .filter((p) => p.playerId !== detectivePlayer.playerId)
-                    .map((p) => this._serializePlayer(p, null)),
-                lastTarget: null,
-            });
-        }
+        this.players
+            .filter((p) => p.alive && (p.role === "MAFIA" || p.role === "DOCTOR" || p.role === "DETECTIVE"))
+            .forEach((player) => this.sendNightTargetsToPlayer(player.playerId));
     }
 
     registerMafiaKill(socketId, targetRef) {
@@ -735,25 +751,27 @@ class GameEngine {
     }
 
     registerVote(socketId, targetRef) {
+        const socket = this.io.sockets.sockets.get(socketId);
+
         if (!this._assertPhase(this.PHASES.VOTING)) {
-            emitError(this.io.to(socketId), ERROR_TYPES.WRONG_PHASE, "التصويت غير مسموح حالياً");
+            if (socket) emitError(socket, ERROR_TYPES.WRONG_PHASE, "التصويت غير مسموح حالياً");
             return;
         }
 
         const player = this._getPlayerBySocketId(socketId);
         if (!player || !player.alive) {
-            emitError(this.io.to(socketId), ERROR_TYPES.PLAYER_DEAD, "اللاعبون الموتى لا يصوتون");
+            if (socket) emitError(socket, ERROR_TYPES.PLAYER_DEAD, "اللاعبون الموتى لا يصوتون");
             return;
         }
 
         if (this.votes[player.playerId]) {
-            emitError(this.io.to(socketId), ERROR_TYPES.ALREADY_VOTED, "لقد صوتت بالفعل");
+            if (socket) emitError(socket, ERROR_TYPES.ALREADY_VOTED, "لقد صوتت بالفعل");
             return;
         }
 
         const target = this._getPlayerByTargetRef(targetRef);
         if (!target || !target.alive) {
-            emitError(this.io.to(socketId), ERROR_TYPES.INVALID_TARGET, "الهدف غير صالح أو ميت");
+            if (socket) emitError(socket, ERROR_TYPES.INVALID_TARGET, "الهدف غير صالح أو ميت");
             return;
         }
 
