@@ -1,11 +1,12 @@
 // index.js — Secret Society Game Server
-// النسخة النهائية: production-ready
+// النسخة النهائية مع دعم playerId الثابت وإدارة الانقطاع
 require("dotenv").config();
 
 const express = require("express");
 const http = require("http");
 const { Server } = require("socket.io");
 const cors = require("cors");
+const { v4: uuidv4 } = require("uuid");
 
 const lobbyManager = require("./src/core/lobbyManager");
 const matchmakingManager = require("./src/core/matchmakingManager");
@@ -30,7 +31,7 @@ const io = new Server(server, {
     pingTimeout: 60000,
     pingInterval: 25000,
     transports: ["websocket", "polling"],
-    maxHttpBufferSize: 1e5, // 100KB — يمنع payloads ضخمة
+    maxHttpBufferSize: 1e5,
 });
 
 app.use(cors({ origin: CLIENT_URL }));
@@ -46,12 +47,9 @@ app.get("/health", (_, res) => res.json({
 }));
 
 // ─── حالة الجلسة ─────────────────────────────────────────────────────────────
-// sessionPassword: كلمة سر يحددها الأدمن للسماح للاعبين بالدخول
-// rejoinCodes:     Map<code, { roomId, role, expiresAt }>
 global.sessionPassword = null;
 global.rejoinCodes = new Map();
 
-// تنظيف الأكواد المنتهية كل دقيقة
 setInterval(() => {
     const now = Date.now();
     let cleaned = 0;
@@ -67,7 +65,6 @@ function findActiveRoom() {
     return rooms.length > 0 ? rooms[0] : null;
 }
 
-// ─── Helper: احصل على الغرفة بناءً على socket.data.roomId ────────────────────
 function getRoomForSocket(socket) {
     return socket.data.roomId
         ? roomManager.getRoom(socket.data.roomId)
@@ -76,9 +73,13 @@ function getRoomForSocket(socket) {
 
 // ─── Socket.io ───────────────────────────────────────────────────────────────
 io.on("connection", (socket) => {
-    lobbyManager.addPlayer(socket);
+    // إنشاء playerId ثابت لهذا العميل
+    const playerId = uuidv4();
+    lobbyManager.addPlayer(socket.id, playerId);
 
-    // أخبر الكلاينت فوراً بحالة الجلسة
+    // إرسال playerId للعميل فوراً
+    socket.emit("player_id", { playerId });
+
     socket.emit("session_password_ready", { ready: !!global.sessionPassword });
 
     // =========================================================================
@@ -118,14 +119,22 @@ io.on("connection", (socket) => {
             socket.data.roomId = room.id;
             room.engine.adminId = socket.id;
 
-            socket.emit("game_started", { roomId: room.id, role: "ADMIN" });
+            socket.emit("game_started", { roomId: room.id, role: "ADMIN", playerId: null });
             socket.emit("room_state", {
-                players: room.players,
+                players: room.players.map(p => ({
+                    playerId: p.playerId,
+                    socketId: p.socketId,
+                    username: p.username,
+                    alive: p.alive,
+                    avatar: p.avatar,
+                    color: p.color,
+                    role: null,
+                })),
                 phase: room.engine.phase,
                 round: room.engine.round,
             });
         } else {
-            socket.emit("game_started", { roomId: null, role: "ADMIN" });
+            socket.emit("game_started", { roomId: null, role: "ADMIN", playerId: null });
         }
 
         socket.emit("admin_joined");
@@ -187,7 +196,6 @@ io.on("connection", (socket) => {
         if (!room) {
             const queueSize = matchmakingManager.getQueueSize();
             const required = matchmakingManager.requiredPlayers;
-            // أبلغ الكل بتحديث الـ queue
             io.emit("queue_update", { queueSize, required });
         }
     });
@@ -208,7 +216,7 @@ io.on("connection", (socket) => {
             socket.emit("waiting_for_players", { message: "لا توجد لعبة نشطة حالياً" });
             return;
         }
-        if (room.players.some(p => p.id === socket.id)) {
+        if (room.players.some(p => p.socketId === socket.id)) {
             emitError(socket, ERROR_TYPES.INVALID_INPUT, "أنت بالفعل لاعب في هذه الغرفة");
             return;
         }
@@ -220,11 +228,16 @@ io.on("connection", (socket) => {
         room.spectators = room.spectators || [];
         if (!room.spectators.includes(socket.id)) room.spectators.push(socket.id);
 
-        socket.emit("game_started", { roomId: room.id, role: "SPECTATOR" });
+        socket.emit("game_started", { roomId: room.id, role: "SPECTATOR", playerId: null });
         socket.emit("room_state", {
             players: room.players.map(p => ({
-                id: p.id, username: p.username, alive: p.alive,
-                avatar: p.avatar, color: p.color, role: null,
+                playerId: p.playerId,
+                socketId: p.socketId,
+                username: p.username,
+                alive: p.alive,
+                avatar: p.avatar,
+                color: p.color,
+                role: null,
             })),
             phase: room.engine.phase,
             round: room.engine.round,
@@ -253,25 +266,8 @@ io.on("connection", (socket) => {
         if (!tid) { emitError(socket, ERROR_TYPES.INVALID_INPUT, "هدف غير صالح"); return; }
 
         const room = getRoomForSocket(socket);
-        console.log("[Socket] mafia_kill received", {
-            socketId: socket.id,
-            roomId: socket.data.roomId,
-            targetId: tid,
-            hasRoom: !!room,
-            engineInstanceId: room?.engine?.instanceId || null,
-            phase: room?.engine?.phase || null,
-            round: room?.engine?.round || null,
-            lastMafiaTarget: room?.engine?.lastMafiaTarget || null,
-        });
         const result = room?.engine?.registerMafiaKill(socket.id, tid);
-        console.log("[Socket] mafia_kill result", {
-            socketId: socket.id,
-            roomId: socket.data.roomId,
-            engineInstanceId: room?.engine?.instanceId || null,
-            result: result || null,
-            currentNightTarget: room?.engine?.nightActions?.mafiaTarget || null,
-            lastMafiaTarget: room?.engine?.lastMafiaTarget || null,
-        });
+        // (يمكن تسجيل result للتصحيح)
     });
 
     socket.on("doctor_save", (targetId) => {
@@ -283,25 +279,7 @@ io.on("connection", (socket) => {
         if (!tid) { emitError(socket, ERROR_TYPES.INVALID_INPUT, "هدف غير صالح"); return; }
 
         const room = getRoomForSocket(socket);
-        console.log("[Socket] doctor_save received", {
-            socketId: socket.id,
-            roomId: socket.data.roomId,
-            targetId: tid,
-            hasRoom: !!room,
-            engineInstanceId: room?.engine?.instanceId || null,
-            phase: room?.engine?.phase || null,
-            round: room?.engine?.round || null,
-            lastDoctorTarget: room?.engine?.lastDoctorTarget || null,
-        });
         const result = room?.engine?.registerDoctorSave(socket.id, tid);
-        console.log("[Socket] doctor_save result", {
-            socketId: socket.id,
-            roomId: socket.data.roomId,
-            engineInstanceId: room?.engine?.instanceId || null,
-            result: result || null,
-            currentNightTarget: room?.engine?.nightActions?.doctorSave || null,
-            lastDoctorTarget: room?.engine?.lastDoctorTarget || null,
-        });
     });
 
     socket.on("detective_check", (targetId) => {
@@ -343,7 +321,7 @@ io.on("connection", (socket) => {
         const room = roomManager.getRoom(roomId);
         if (!room) return;
 
-        const player = room.players.find(p => p.id === socket.id);
+        const player = room.players.find(p => p.socketId === socket.id);
         const isAdmin = socket.data.isAdmin;
         const username = isAdmin ? "ADMIN 👑" : (player?.username || "Unknown");
         const alive = isAdmin ? true : (player?.alive ?? true);
@@ -351,7 +329,6 @@ io.on("connection", (socket) => {
         io.to(roomId).emit("receive_message", { username, message: msg, alive });
     });
 
-    // ─── Mafia chat (بين أفراد المافيا فقط) ──────────────────────────────────
     socket.on("mafia_chat", (message) => {
         if (!rateLimiter.events.MAFIA_CHAT(socket.id)) return;
 
@@ -361,17 +338,18 @@ io.on("connection", (socket) => {
         const room = getRoomForSocket(socket);
         if (!room) return;
 
-        const player = room.players.find(p => p.id === socket.id);
+        const player = room.players.find(p => p.socketId === socket.id);
         if (!player || player.role !== "MAFIA") return;
 
-        // أرسل للمافيا فقط
         room.players
             .filter(p => p.role === "MAFIA")
             .forEach(m => {
-                io.to(m.id).emit("mafia_chat_message", {
-                    from: player.username,
-                    message: msg,
-                });
+                if (m.socketId) {
+                    io.to(m.socketId).emit("mafia_chat_message", {
+                        from: player.username,
+                        message: msg,
+                    });
+                }
             });
     });
 
@@ -433,7 +411,6 @@ io.on("connection", (socket) => {
         room.engine.executeNightResults();
         io.to(socket.data.roomId).emit("night_story", { story: storyText });
 
-        // تحقق من شرط الفوز قبل بدء النهار
         if (!room.engine.checkWinCondition()) {
             room.engine.startDay();
         }
@@ -512,42 +489,51 @@ io.on("connection", (socket) => {
             return;
         }
 
-        // أنشئ اللاعب بالدور المحدد من الأدمن
+        // إنشاء لاعب جديد بمعرف ثابت جديد
+        const newPlayerId = uuidv4();
         const newPlayer = {
-            id: socket.id,
+            playerId: newPlayerId,
+            socketId: socket.id,
             username: cleanName,
             role: entry.role,
             alive: true,
             avatar: "😎",
             color: "#1e293b",
+            connected: true,
         };
         room.players.push(newPlayer);
+        room.engine.players.push(newPlayer);
+        room.engine._playerIdToPlayer.set(newPlayerId, newPlayer);
+        room.engine._socketToPlayer.set(socket.id, newPlayer);
+
         lobbyManager.updateUsername(socket.id, cleanName);
 
         socket.join(entry.roomId);
         socket.data.roomId = entry.roomId;
         socket.data.type = "PLAYER";
 
-        // الكود يُستخدم مرة واحدة فقط
         global.rejoinCodes.delete(cleanCode);
 
-        socket.emit("game_started", { roomId: entry.roomId, role: entry.role });
+        socket.emit("game_started", { roomId: entry.roomId, role: entry.role, playerId: newPlayerId });
         socket.to(entry.roomId).emit("player_rejoined", {
-            id: socket.id, username: cleanName, role: entry.role,
+            playerId: newPlayerId,
+            username: cleanName,
+            role: entry.role,
         });
 
         logger.rejoin(cleanName, entry.roomId);
     });
 
-    // ─── Rejoin بجلسة محفوظة (localStorage) ──────────────────────────────────
-    socket.on("rejoin_game", ({ roomId, username, role } = {}) => {
+    // ─── Rejoin بجلسة محفوظة (باستخدام playerId) ──────────────────────────────────
+    socket.on("rejoin_game", ({ roomId, username, role, playerId } = {}) => {
         if (!rateLimiter.events.REJOIN(socket.id)) return;
 
         const cleanRoomId = validate.roomId(roomId);
         const cleanName = validate.username(username);
         const cleanRole = validate.role(role);
+        const cleanPlayerId = validate.playerId(playerId);
 
-        if (!cleanRoomId || !cleanName || !cleanRole) {
+        if (!cleanRoomId || !cleanName || !cleanRole || !cleanPlayerId) {
             socket.emit("rejoin_failed");
             return;
         }
@@ -555,26 +541,36 @@ io.on("connection", (socket) => {
         const room = roomManager.getRoom(cleanRoomId);
         if (!room) { socket.emit("rejoin_failed"); return; }
 
-        // ابحث بالاسم + الدور معاً — أكثر دقة من الاسم وحده
-        const player = room.players.find(
-            p => p.username === cleanName && p.role === cleanRole
-        );
+        // البحث عن اللاعب في engine.players باستخدام playerId
+        const player = room.engine._playerIdToPlayer.get(cleanPlayerId);
         if (!player) { socket.emit("rejoin_failed"); return; }
 
-        const oldId = player.id;
-        player.id = socket.id;
+        // تحديث socketId
+        const oldSocketId = player.socketId;
+        player.socketId = socket.id;
+        player.connected = true;
+        room.engine._socketToPlayer.delete(oldSocketId);
+        room.engine._socketToPlayer.set(socket.id, player);
+
+        // تحديث اللاعب في room.players (المرجع نفسه)
+        const roomPlayer = room.players.find(p => p.playerId === cleanPlayerId);
+        if (roomPlayer) {
+            roomPlayer.socketId = socket.id;
+            roomPlayer.connected = true;
+        }
 
         socket.join(cleanRoomId);
         socket.data.roomId = cleanRoomId;
         socket.data.type = "PLAYER";
         lobbyManager.updateUsername(socket.id, cleanName);
 
-        // أبلغ الغرفة بتغيير الـ socket ID (مهم للـ voice)
         socket.to(cleanRoomId).emit("voice_reconnect_request", {
-            oldId, newId: socket.id, username: cleanName,
+            oldId: oldSocketId,
+            newId: socket.id,
+            username: cleanName,
         });
 
-        socket.emit("game_started", { roomId: cleanRoomId, role: player.role });
+        socket.emit("game_started", { roomId: cleanRoomId, role: player.role, playerId: player.playerId });
         logger.rejoin(cleanName, cleanRoomId);
     });
 
@@ -588,17 +584,15 @@ io.on("connection", (socket) => {
         const room = getRoomForSocket(socket);
         if (!room) return;
 
-        const player = room.players.find(p => p.id === socket.id);
+        const player = room.players.find(p => p.socketId === socket.id);
         if (player) player.peerId = peerId;
 
-        // أرسل قائمة الـ peers الموجودين
         const peers = room.players
-            .filter(p => p.id !== socket.id && p.peerId)
+            .filter(p => p.socketId !== socket.id && p.peerId)
             .map(p => ({ peerId: p.peerId, username: p.username, role: p.role }));
 
         socket.emit("voice_peers", { peers });
 
-        // أبلغ الباقين بالـ peer الجديد
         socket.to(socket.data.roomId).emit("voice_peer_joined", {
             peerId,
             username: player?.username,
@@ -614,27 +608,37 @@ io.on("connection", (socket) => {
     socket.on("disconnect", (reason) => {
         logger.disconnect(socket.id, reason);
 
-        lobbyManager.removePlayer(socket.id);
+        // تحديث حالة اللاعب في lobbyManager
+        lobbyManager.markDisconnected(socket.id);
+
+        // إزالة من queue
         matchmakingManager.removeFromQueue(socket.id);
+
         rateLimiter.cleanup(socket.id);
 
         const roomId = socket.data.roomId;
         if (roomId) {
-            socket.to(roomId).emit("player_disconnected", { id: socket.id });
-
-            // إزالة اللاعب من الغرفة إذا كان موجوداً
             const room = roomManager.getRoom(roomId);
-            if (room) {
-                // إزالة من قائمة اللاعبين
-                const beforePlayers = room.players.length;
-                room.players = room.players.filter(p => p.id !== socket.id);
-                if (room.players.length < beforePlayers) {
-                    logger.info("DISCONNECT", `Player removed from room players`, {
-                        roomId, socketId: socket.id, remaining: room.players.length
+            if (room && room.engine) {
+                const player = room.engine._getPlayerBySocketId(socket.id);
+                if (player) {
+                    player.connected = false;
+                    player.socketId = null;
+                    room.engine._socketToPlayer.delete(socket.id);
+
+                    // تحديث room.players أيضاً
+                    const roomPlayer = room.players.find(p => p.socketId === socket.id);
+                    if (roomPlayer) {
+                        roomPlayer.connected = false;
+                        roomPlayer.socketId = null;
+                    }
+
+                    // إبلاغ الغرفة بفقدان الاتصال
+                    socket.to(roomId).emit("player_disconnected", {
+                        playerId: player.playerId,
+                        username: player.username,
                     });
                 }
-                // إزالة من المشاهدين
-                room.spectators = (room.spectators || []).filter(id => id !== socket.id);
             }
         }
     });
@@ -649,7 +653,6 @@ server.listen(PORT, () => {
     });
 });
 
-// ─── Graceful shutdown ────────────────────────────────────────────────────────
 process.on("SIGTERM", () => {
     logger.warn("SERVER", "SIGTERM received — shutting down");
     io.emit("server_reset");

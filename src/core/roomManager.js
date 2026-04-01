@@ -12,12 +12,14 @@ class RoomManager {
         const roomId = uuidv4();
 
         const roomPlayers = players.map(p => ({
-            id:       p.id,
-            username: p.username,
-            avatar:   p.avatar || "😎",
-            color:    p.color  || "#1e293b",
-            role:     null,
-            alive:    true,
+            playerId:  uuidv4(),          // ✅ معرف ثابت لا يتغير
+            socketId:  p.id,              // معرف socket الحالي (قد يتغير عند إعادة الاتصال)
+            username:  p.username,
+            avatar:    p.avatar || "😎",
+            color:     p.color  || "#1e293b",
+            role:      null,
+            alive:     true,
+            connected: true,              // ✅ حالة الاتصال
         }));
 
         const room = {

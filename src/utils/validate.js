@@ -1,7 +1,4 @@
 // src/utils/validate.js
-// تحقق من كل input قبل ما يلمس game state
-// المبدأ: لا تثق بأي شيء يجي من الـ client
-
 const VALID_ROLES = ["MAFIA", "DOCTOR", "DETECTIVE", "CITIZEN"];
 
 /**
@@ -28,7 +25,6 @@ function socketId(val) {
 function roomId(val) {
     if (typeof val !== "string") return null;
     const clean = val.trim();
-    // UUID format لكن ما نشترطه بشكل صارم
     return clean.length > 0 && clean.length <= 50 ? clean : null;
 }
 
@@ -74,4 +70,15 @@ function playerCount(val) {
     return Number.isInteger(n) && n >= 4 && n <= 12 ? n : null;
 }
 
-module.exports = { username, socketId, roomId, role, message, password, rejoinCode, playerCount };
+/**
+ * playerId: UUID string (صيغة UUID v4)
+ */
+function playerId(val) {
+    if (typeof val !== "string") return null;
+    const clean = val.trim();
+    // regex للـ UUID v4
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    return uuidRegex.test(clean) ? clean : null;
+}
+
+module.exports = { username, socketId, roomId, role, message, password, rejoinCode, playerCount, playerId };
