@@ -363,8 +363,9 @@ class GameEngine {
             return { rejected: true, reason: ERROR_TYPES.INVALID_TARGET };
         }
 
-        console.log("[Repeat-Check] Mafia | Last:", this.lastMafiaTargetPlayerId, "| New:", target.playerId);
+        console.log(`[Repeat-Check] Mafia | Last: ${this.lastMafiaTargetPlayerId} | New: ${target.playerId}`);
         if (this.lastMafiaTargetPlayerId !== null && this.lastMafiaTargetPlayerId === target.playerId) {
+            console.log("[Repeat-Check] Mafia REPEAT DETECTED!");
             this._emitRoleError(player.playerId, "mafia_error", ERROR_TYPES.MAFIA_REPEAT_TARGET,
                 "لا يمكنك استهداف نفس اللاعب ليلتين متتاليتين",
                 { error: "MAFIA_REPEAT_TARGET" });
@@ -437,8 +438,9 @@ class GameEngine {
             return { rejected: true, reason: ERROR_TYPES.SELF_TARGET };
         }
 
-        console.log("[Repeat-Check] Doctor | Last:", this.lastDoctorTargetPlayerId, "| New:", target.playerId);
+        console.log(`[Repeat-Check] Doctor | Last: ${this.lastDoctorTargetPlayerId} | New: ${target.playerId}`);
         if (this.lastDoctorTargetPlayerId !== null && this.lastDoctorTargetPlayerId === target.playerId) {
+            console.log("[Repeat-Check] Doctor REPEAT DETECTED!");
             this._emitRoleError(player.playerId, "doctor_error", ERROR_TYPES.DOCTOR_REPEAT_TARGET,
                 "لا يمكنك حماية نفس اللاعب ليلتين متتاليتين",
                 { error: "DOCTOR_REPEAT_TARGET" });
@@ -597,7 +599,7 @@ class GameEngine {
             finalVictimPlayerId = mafiaTargetPlayerId;
         }
 
-        // Update last targets
+        // Update last targets BEFORE clearing nightActions
         if (mafiaTargetPlayerId) {
             this.lastMafiaTargetPlayerId = mafiaTargetPlayerId;
             console.log("[Persist] lastMafiaTargetPlayerId updated in executeNightResults:", this.lastMafiaTargetPlayerId);
