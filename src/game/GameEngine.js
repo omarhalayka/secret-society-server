@@ -496,8 +496,15 @@ class GameEngine {
         const { mafiaTarget, doctorSave, detectiveChecks } = this.nightActions;
         const finalVictim = (mafiaTarget && mafiaTarget !== doctorSave) ? mafiaTarget : null;
 
-        // تم إزالة تحديث lastMafiaTarget و lastDoctorTarget من هنا
-        // سيتم تحديثهما في executeNightResults بدلاً من ذلك
+        // تحديث lastTarget هنا أيضاً (للتأكد)
+        if (mafiaTarget)  {
+            this.lastMafiaTarget = mafiaTarget;
+            console.log("[Persist] lastMafiaTarget updated in endNight:", this.lastMafiaTarget);
+        }
+        if (doctorSave) {
+            this.lastDoctorTarget = doctorSave;
+            console.log("[Persist] lastDoctorTarget updated in endNight:", this.lastDoctorTarget);
+        }
 
         console.log("[GameEngine] endNight — final state", {
             roomId:                  this.roomId,
@@ -534,9 +541,30 @@ class GameEngine {
     }
 
     executeNightResults() {
-        const { finalVictim, mafiaTarget, doctorSave } = this.nightResults;
+        // استخدام nightActions إذا كانت nightResults غير محدثة
+        let mafiaTarget = this.nightResults.mafiaTarget;
+        let doctorSave = this.nightResults.doctorSave;
+        let detectiveChecks = this.nightResults.detectiveChecks;
+        let finalVictim = this.nightResults.finalVictim;
 
-        // تحديث lastTarget بناءً على إجراءات الليل الحالية
+        // إذا لم تكن nightResults محدثة، نأخذ من nightActions
+        if (!mafiaTarget && this.nightActions.mafiaTarget) {
+            mafiaTarget = this.nightActions.mafiaTarget;
+            console.log("[executeNightResults] using mafiaTarget from nightActions:", mafiaTarget);
+        }
+        if (!doctorSave && this.nightActions.doctorSave) {
+            doctorSave = this.nightActions.doctorSave;
+            console.log("[executeNightResults] using doctorSave from nightActions:", doctorSave);
+        }
+        if (!detectiveChecks.length && this.nightActions.detectiveChecks.length) {
+            detectiveChecks = this.nightActions.detectiveChecks;
+            console.log("[executeNightResults] using detectiveChecks from nightActions:", detectiveChecks);
+        }
+        if (!finalVictim) {
+            finalVictim = (mafiaTarget && mafiaTarget !== doctorSave) ? mafiaTarget : null;
+        }
+
+        // تحديث lastTarget
         if (mafiaTarget) {
             this.lastMafiaTarget = mafiaTarget;
             console.log("[Persist] lastMafiaTarget updated in executeNightResults:", this.lastMafiaTarget);
@@ -546,6 +574,7 @@ class GameEngine {
             console.log("[Persist] lastDoctorTarget updated in executeNightResults:", this.lastDoctorTarget);
         }
 
+        // تنفيذ القتل والنتائج
         if (mafiaTarget) {
             const target = this.players.find((p) => p.id === mafiaTarget);
             const saved  = mafiaTarget === doctorSave;
@@ -580,12 +609,22 @@ class GameEngine {
             }
         }
 
-        // مسح nightResults بعد التنفيذ
+        // مسح nightResults و nightActions بعد التنفيذ
         this.nightResults = {
             mafiaTarget:     null,
             doctorSave:      null,
             detectiveChecks: [],
             finalVictim:     null,
+        };
+        this.nightActions = {
+            mafiaTarget:     null,
+            doctorSave:      null,
+            detectiveChecks: [],
+        };
+        this.nightActionStatus = {
+            mafia:     { done: false, username: null },
+            doctor:    { done: false, username: null },
+            detective: { done: false, username: null },
         };
     }
 
