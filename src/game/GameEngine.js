@@ -277,10 +277,13 @@ class GameEngine {
                 });
             });
 
+        // ✅ الطبيب لا يرى نفسه في قائمة الحماية
         const doctorPlayer = this.players.find((p) => p.role === "DOCTOR" && p.alive);
         if (doctorPlayer) {
             this._emitToPlayer(doctorPlayer.id, "night_targets", {
-                players:    alivePlayers.map((p) => ({ id: p.id, username: p.username })),
+                players:    alivePlayers
+                    .filter((p) => p.id !== doctorPlayer.id)
+                    .map((p) => ({ id: p.id, username: p.username })),
                 lastTarget: this.lastDoctorTarget,
             });
         }
@@ -496,15 +499,13 @@ class GameEngine {
         const { mafiaTarget, doctorSave, detectiveChecks } = this.nightActions;
         const finalVictim = (mafiaTarget && mafiaTarget !== doctorSave) ? mafiaTarget : null;
 
-        // تحديث lastTarget هنا أيضاً (للتأكد)
-        if (mafiaTarget)  {
-            this.lastMafiaTarget = mafiaTarget;
-            console.log("[Persist] lastMafiaTarget updated in endNight:", this.lastMafiaTarget);
-        }
-        if (doctorSave) {
-            this.lastDoctorTarget = doctorSave;
-            console.log("[Persist] lastDoctorTarget updated in endNight:", this.lastDoctorTarget);
-        }
+        // ✅ تحديث lastTarget – دائماً (حتى لو كانت null)
+        this.lastMafiaTarget  = mafiaTarget  || null;
+        this.lastDoctorTarget = doctorSave   || null;
+        console.log("[Persist] endNight targets:", {
+            lastMafiaTarget:  this.lastMafiaTarget,
+            lastDoctorTarget: this.lastDoctorTarget,
+        });
 
         console.log("[GameEngine] endNight — final state", {
             roomId:                  this.roomId,
@@ -564,15 +565,13 @@ class GameEngine {
             finalVictim = (mafiaTarget && mafiaTarget !== doctorSave) ? mafiaTarget : null;
         }
 
-        // تحديث lastTarget
-        if (mafiaTarget) {
-            this.lastMafiaTarget = mafiaTarget;
-            console.log("[Persist] lastMafiaTarget updated in executeNightResults:", this.lastMafiaTarget);
-        }
-        if (doctorSave) {
-            this.lastDoctorTarget = doctorSave;
-            console.log("[Persist] lastDoctorTarget updated in executeNightResults:", this.lastDoctorTarget);
-        }
+        // ✅ تحديث lastTarget – دائماً (حتى لو كانت null)
+        this.lastMafiaTarget  = mafiaTarget  || null;
+        this.lastDoctorTarget = doctorSave   || null;
+        console.log("[Persist] executeNightResults targets:", {
+            lastMafiaTarget:  this.lastMafiaTarget,
+            lastDoctorTarget: this.lastDoctorTarget,
+        });
 
         // تنفيذ القتل والنتائج
         if (mafiaTarget) {
