@@ -74,11 +74,12 @@ function getRoomForSocket(socket) {
 // ─── Socket.io ───────────────────────────────────────────────────────────────
 io.on("connection", (socket) => {
     // إنشاء playerId ثابت لهذا العميل
-    const playerId = uuidv4();
-    lobbyManager.addPlayer(socket.id, playerId);
+    const requestedPlayerId = validate.playerId(socket.handshake.auth?.playerId) || uuidv4();
+    const lobbyPlayer = lobbyManager.addPlayer(socket.id, requestedPlayerId);
+    socket.data.playerId = lobbyPlayer.playerId;
 
     // إرسال playerId للعميل فوراً
-    socket.emit("player_id", { playerId });
+    socket.emit("player_id", { playerId: lobbyPlayer.playerId });
 
     socket.emit("session_password_ready", { ready: !!global.sessionPassword });
 
@@ -122,6 +123,7 @@ io.on("connection", (socket) => {
             socket.emit("game_started", { roomId: room.id, role: "ADMIN", playerId: null });
             socket.emit("room_state", {
                 players: room.players.map(p => ({
+                    id: p.playerId,
                     playerId: p.playerId,
                     socketId: p.socketId,
                     username: p.username,
@@ -180,6 +182,10 @@ io.on("connection", (socket) => {
 
         const p = lobbyManager.getPlayer(socket.id);
         if (!p) return;
+        if (socket.data.roomId) {
+            emitError(socket, ERROR_TYPES.INVALID_INPUT, "أنت موجود بالفعل داخل غرفة");
+            return;
+        }
 
         // التحقق من كلمة السر
         if (global.sessionPassword) {
@@ -231,6 +237,7 @@ io.on("connection", (socket) => {
         socket.emit("game_started", { roomId: room.id, role: "SPECTATOR", playerId: null });
         socket.emit("room_state", {
             players: room.players.map(p => ({
+                id: p.playerId,
                 playerId: p.playerId,
                 socketId: p.socketId,
                 username: p.username,
@@ -262,7 +269,7 @@ io.on("connection", (socket) => {
             emitError(socket, ERROR_TYPES.RATE_LIMITED, "حاول مرة أخرى");
             return;
         }
-        const tid = validate.socketId(targetId);
+        const tid = typeof targetId === "string" ? targetId.trim() : null;
         if (!tid) { emitError(socket, ERROR_TYPES.INVALID_INPUT, "هدف غير صالح"); return; }
 
         const room = getRoomForSocket(socket);
@@ -275,7 +282,7 @@ io.on("connection", (socket) => {
             emitError(socket, ERROR_TYPES.RATE_LIMITED, "حاول مرة أخرى");
             return;
         }
-        const tid = validate.socketId(targetId);
+        const tid = typeof targetId === "string" ? targetId.trim() : null;
         if (!tid) { emitError(socket, ERROR_TYPES.INVALID_INPUT, "هدف غير صالح"); return; }
 
         const room = getRoomForSocket(socket);
@@ -287,7 +294,7 @@ io.on("connection", (socket) => {
             emitError(socket, ERROR_TYPES.RATE_LIMITED, "حاول مرة أخرى");
             return;
         }
-        const tid = validate.socketId(targetId);
+        const tid = typeof targetId === "string" ? targetId.trim() : null;
         if (!tid) { emitError(socket, ERROR_TYPES.INVALID_INPUT, "هدف غير صالح"); return; }
 
         const room = getRoomForSocket(socket);
@@ -299,7 +306,7 @@ io.on("connection", (socket) => {
             emitError(socket, ERROR_TYPES.RATE_LIMITED, "حاول مرة أخرى");
             return;
         }
-        const tid = validate.socketId(targetId);
+        const tid = typeof targetId === "string" ? targetId.trim() : null;
         if (!tid) { emitError(socket, ERROR_TYPES.INVALID_INPUT, "هدف غير صالح"); return; }
 
         const room = getRoomForSocket(socket);
@@ -511,6 +518,7 @@ io.on("connection", (socket) => {
         socket.join(entry.roomId);
         socket.data.roomId = entry.roomId;
         socket.data.type = "PLAYER";
+        socket.data.playerId = newPlayerId;
 
         global.rejoinCodes.delete(cleanCode);
 
@@ -518,7 +526,6 @@ io.on("connection", (socket) => {
         socket.to(entry.roomId).emit("player_rejoined", {
             playerId: newPlayerId,
             username: cleanName,
-            role: entry.role,
         });
 
         logger.rejoin(cleanName, entry.roomId);
@@ -562,6 +569,7 @@ io.on("connection", (socket) => {
         socket.join(cleanRoomId);
         socket.data.roomId = cleanRoomId;
         socket.data.type = "PLAYER";
+        socket.data.playerId = player.playerId;
         lobbyManager.updateUsername(socket.id, cleanName);
 
         socket.to(cleanRoomId).emit("voice_reconnect_request", {
@@ -620,6 +628,9 @@ io.on("connection", (socket) => {
         if (roomId) {
             const room = roomManager.getRoom(roomId);
             if (room && room.engine) {
+                room.spectators = (room.spectators || []).filter((id) => id !== socket.id);
+                room.engine.removeSpectator(socket.id);
+
                 const player = room.engine._getPlayerBySocketId(socket.id);
                 if (player) {
                     player.connected = false;

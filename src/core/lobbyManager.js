@@ -9,6 +9,26 @@ class LobbyManager {
     }
 
     addPlayer(socketId, playerId) {
+        const existing = this.playerByPlayerId.get(playerId);
+        if (existing) {
+            const oldSocketId = existing.id;
+            if (oldSocketId && oldSocketId !== socketId) {
+                this.players.delete(oldSocketId);
+                this.playerIdBySocket.delete(oldSocketId);
+            }
+
+            existing.id = socketId;
+            existing.connected = true;
+            existing.connectedAt = Date.now();
+
+            this.players.set(socketId, existing);
+            this.playerIdBySocket.set(socketId, playerId);
+            this.playerByPlayerId.set(playerId, existing);
+
+            logger.debug("LOBBY", `Player ${existing.username} reattached to socket ${socketId}`);
+            return existing;
+        }
+
         const player = {
             id:          socketId,
             playerId:    playerId,
@@ -23,6 +43,10 @@ class LobbyManager {
         this.playerByPlayerId.set(playerId, player);
         logger.connect(socketId);
         return player;
+    }
+
+    getPlayerIdBySocket(socketId) {
+        return this.playerIdBySocket.get(socketId) || null;
     }
 
     markDisconnected(socketId) {

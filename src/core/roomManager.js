@@ -5,21 +5,21 @@ const logger         = require("../utils/logger");
 
 class RoomManager {
     constructor() {
-        this.rooms = new Map(); // roomId → room
+        this.rooms = new Map(); // roomId -> room
     }
 
     createRoom(players, io, adminId = null) {
         const roomId = uuidv4();
 
-        const roomPlayers = players.map(p => ({
-            playerId:  uuidv4(),          // ✅ معرف ثابت لا يتغير
-            socketId:  p.id,              // معرف socket الحالي (قد يتغير عند إعادة الاتصال)
+        const roomPlayers = players.map((p) => ({
+            playerId:  p.playerId || uuidv4(),
+            socketId:  p.id,
             username:  p.username,
-            avatar:    p.avatar || "😎",
+            avatar:    p.avatar || "?",
             color:     p.color  || "#1e293b",
             role:      null,
             alive:     true,
-            connected: true,              // ✅ حالة الاتصال
+            connected: true,
         }));
 
         const room = {

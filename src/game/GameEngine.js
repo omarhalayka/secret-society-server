@@ -81,6 +81,39 @@ class GameEngine {
         this.io.to(this.roomId).emit(event, data);
     }
 
+    _emitRoleAware(event, playerData, spectatorData = playerData) {
+        const emitted = new Set();
+
+        this.players.forEach((player) => {
+            if (!player?.connected || !player.socketId) return;
+            emitted.add(player.socketId);
+            this.io.to(player.socketId).emit(event, playerData);
+        });
+
+        if (this.adminId) {
+            emitted.add(this.adminId);
+            this.io.to(this.adminId).emit(event, playerData);
+        }
+
+        this.spectators.forEach((socketId) => {
+            if (!socketId || emitted.has(socketId)) return;
+            this.io.to(socketId).emit(event, spectatorData);
+        });
+    }
+
+    _serializePlayer(player, role = null) {
+        return {
+            id:       player.playerId,
+            playerId: player.playerId,
+            socketId: player.socketId,
+            username: player.username,
+            alive:    player.alive,
+            avatar:   player.avatar || "😎",
+            color:    player.color  || "#1e293b",
+            role,
+        };
+    }
+
     _emitToPlayer(playerId, event, data) {
         const p = this._playerIdToPlayer.get(playerId);
         if (p && p.connected && p.socketId) {
@@ -98,7 +131,16 @@ class GameEngine {
 
     _sendNightStatusToAdmin() {
         if (!this.adminId) return;
-        this.io.to(this.adminId).emit("night_action_status", this.nightActionStatus);
+        const withUsernames = Object.fromEntries(
+            Object.entries(this.nightActionStatus).map(([role, value]) => {
+                const actor = value.playerId ? this._playerIdToPlayer.get(value.playerId) : null;
+                return [role, {
+                    ...value,
+                    username: actor?.username || null,
+                }];
+            })
+        );
+        this.io.to(this.adminId).emit("night_action_status", withUsernames);
     }
 
     _getAlivePlayer(playerId) {
@@ -112,19 +154,16 @@ class GameEngine {
     }
 
     _getPublicPlayers() {
-        return this.players.map((p) => ({
-            playerId:  p.playerId,
-            socketId:  p.socketId,
-            username:  p.username,
-            alive:     p.alive,
-            avatar:    p.avatar || "😎",
-            color:     p.color  || "#1e293b",
-            role:      null,
-        }));
+        return this.players.map((p) => this._serializePlayer(p, null));
     }
 
     _getPlayerBySocketId(socketId) {
         return this._socketToPlayer.get(socketId) || null;
+    }
+
+    _getPlayerByTargetRef(targetRef) {
+        if (!targetRef || typeof targetRef !== "string") return null;
+        return this._playerIdToPlayer.get(targetRef) || this._socketToPlayer.get(targetRef) || null;
     }
 
     updateSocketId(oldSocketId, newSocketId) {
@@ -194,6 +233,7 @@ class GameEngine {
         };
 
         logger.adminAct("resetGame", this.roomId);
+        this._sendNightStatusToAdmin();
         this.broadcast("back_to_lobby", {});
     }
 
@@ -217,6 +257,7 @@ class GameEngine {
             this._emitToPlayer(player.playerId, "game_started", {
                 roomId: this.roomId,
                 role:   player.role,
+                playerId: player.playerId,
             });
         });
 
@@ -291,6 +332,7 @@ class GameEngine {
             detective: { done: false, playerId: null },
         };
         this.chatEnabled = true;
+        this._sendNightStatusToAdmin();
 
         logger.phase(this.phase, this.round, this.roomId);
         this.broadcast("phase_changed", { phase: this.phase, round: this.round });
@@ -303,7 +345,7 @@ class GameEngine {
             const mafiaTargets = alivePlayers.filter((p) => p.role !== "MAFIA");
             mafiaPlayers.forEach((m) => {
                 this._emitToPlayer(m.playerId, "night_targets", {
-                    players: mafiaTargets.map((p) => ({ id: p.socketId, username: p.username, playerId: p.playerId })),
+                    players: mafiaTargets.map((p) => this._serializePlayer(p, null)),
                     lastTarget: this.lastMafiaTargetPlayerId,
                 });
             });
@@ -315,7 +357,7 @@ class GameEngine {
             this._emitToPlayer(doctorPlayer.playerId, "night_targets", {
                 players: alivePlayers
                     .filter((p) => p.playerId !== doctorPlayer.playerId)
-                    .map((p) => ({ id: p.socketId, username: p.username, playerId: p.playerId })),
+                    .map((p) => this._serializePlayer(p, null)),
                 lastTarget: this.lastDoctorTargetPlayerId,
             });
         }
@@ -326,13 +368,13 @@ class GameEngine {
             this._emitToPlayer(detectivePlayer.playerId, "night_targets", {
                 players: alivePlayers
                     .filter((p) => p.playerId !== detectivePlayer.playerId)
-                    .map((p) => ({ id: p.socketId, username: p.username, playerId: p.playerId })),
+                    .map((p) => this._serializePlayer(p, null)),
                 lastTarget: null,
             });
         }
     }
 
-    registerMafiaKill(socketId, targetSocketId) {
+    registerMafiaKill(socketId, targetRef) {
         const player = this._getPlayerBySocketId(socketId);
         if (!player || player.role !== "MAFIA" || !player.alive) {
             return { rejected: true, reason: "NOT_MAFIA" };
@@ -350,7 +392,7 @@ class GameEngine {
             return { rejected: true, reason: ERROR_TYPES.ACTION_USED };
         }
 
-        const target = this._getPlayerBySocketId(targetSocketId);
+        const target = this._getPlayerByTargetRef(targetRef);
         if (!target || !target.alive) {
             this._emitRoleError(player.playerId, "mafia_error", ERROR_TYPES.INVALID_TARGET,
                 "الهدف غير صالح أو ميت");
@@ -381,7 +423,8 @@ class GameEngine {
             .forEach((m) => {
                 this._emitToPlayer(m.playerId, "mafia_suggestion", {
                     suggestedBy:    player.username,
-                    targetId:       target.socketId,
+                    targetId:       target.playerId,
+                    targetSocketId: target.socketId,
                     targetPlayerId: target.playerId,
                     targetUsername: target.username,
                 });
@@ -391,7 +434,8 @@ class GameEngine {
 
         this._emitToPlayer(player.playerId, "mafia_action_registered", {
             ok:             true,
-            targetId:       target.socketId,
+            targetId:       target.playerId,
+            targetSocketId: target.socketId,
             targetPlayerId: target.playerId,
             targetUsername: target.username,
             round:          this.round,
@@ -407,7 +451,7 @@ class GameEngine {
         return { ok: true, targetPlayerId: target.playerId };
     }
 
-    registerDoctorSave(socketId, targetSocketId) {
+    registerDoctorSave(socketId, targetRef) {
         const player = this._getPlayerBySocketId(socketId);
         if (!player || player.role !== "DOCTOR" || !player.alive) {
             return { rejected: true, reason: "NOT_DOCTOR" };
@@ -425,7 +469,7 @@ class GameEngine {
             return { rejected: true, reason: ERROR_TYPES.ACTION_USED };
         }
 
-        const target = this._getPlayerBySocketId(targetSocketId);
+        const target = this._getPlayerByTargetRef(targetRef);
         if (!target || !target.alive) {
             this._emitRoleError(player.playerId, "doctor_error", ERROR_TYPES.INVALID_TARGET,
                 "الهدف غير صالح أو ميت");
@@ -455,7 +499,8 @@ class GameEngine {
 
         this._emitToPlayer(player.playerId, "doctor_action_registered", {
             ok:             true,
-            targetId:       target.socketId,
+            targetId:       target.playerId,
+            targetSocketId: target.socketId,
             targetPlayerId: target.playerId,
             targetUsername: target.username,
             round:          this.round,
@@ -471,32 +516,29 @@ class GameEngine {
         return { ok: true, targetPlayerId: target.playerId };
     }
 
-    registerDetectiveCheck(socketId, targetSocketId) {
+    registerDetectiveCheck(socketId, targetRef) {
         const player = this._getPlayerBySocketId(socketId);
         if (!player || player.role !== "DETECTIVE" || !player.alive) return;
+        const socket = this.io.sockets.sockets.get(socketId);
 
         if (!this._assertPhase(this.PHASES.NIGHT)) {
-            emitError(this.io.to(socketId), ERROR_TYPES.WRONG_PHASE,
-                "لا يمكنك التحقيق خارج مرحلة الليل");
+            if (socket) emitError(socket, ERROR_TYPES.WRONG_PHASE, "لا يمكنك التحقيق خارج مرحلة الليل");
             return;
         }
 
         if (this.nightActionStatus.detective.done) {
-            emitError(this.io.to(socketId), ERROR_TYPES.ACTION_USED,
-                "لقد قمت بالتحقيق بالفعل هذه الليلة");
+            if (socket) emitError(socket, ERROR_TYPES.ACTION_USED, "لقد قمت بالتحقيق بالفعل هذه الليلة");
             return;
         }
 
-        const target = this._getPlayerBySocketId(targetSocketId);
+        const target = this._getPlayerByTargetRef(targetRef);
         if (!target || !target.alive) {
-            emitError(this.io.to(socketId), ERROR_TYPES.INVALID_TARGET,
-                "الهدف غير صالح أو ميت");
+            if (socket) emitError(socket, ERROR_TYPES.INVALID_TARGET, "الهدف غير صالح أو ميت");
             return;
         }
 
         if (player.playerId === target.playerId) {
-            emitError(this.io.to(socketId), ERROR_TYPES.SELF_TARGET,
-                "لا يمكنك التحقيق في نفسك");
+            if (socket) emitError(socket, ERROR_TYPES.SELF_TARGET, "لا يمكنك التحقيق في نفسك");
             return;
         }
 
@@ -639,7 +681,12 @@ class GameEngine {
 
         if (finalVictim && finalVictim.alive) {
             finalVictim.alive = false;
-            this.broadcast("player_killed", { id: finalVictim.socketId, username: finalVictim.username, playerId: finalVictim.playerId });
+            this.broadcast("player_killed", {
+                id: finalVictim.playerId,
+                socketId: finalVictim.socketId,
+                username: finalVictim.username,
+                playerId: finalVictim.playerId,
+            });
         }
 
         // Reset night data for next night
@@ -655,6 +702,7 @@ class GameEngine {
             detectiveChecks: [],
             finalVictimPlayerId:     null,
         };
+        this._sendNightStatusToAdmin();
     }
 
     startDay() {
@@ -686,7 +734,7 @@ class GameEngine {
         this.broadcast("voting_started", {});
     }
 
-    registerVote(socketId, targetSocketId) {
+    registerVote(socketId, targetRef) {
         if (!this._assertPhase(this.PHASES.VOTING)) {
             emitError(this.io.to(socketId), ERROR_TYPES.WRONG_PHASE, "التصويت غير مسموح حالياً");
             return;
@@ -703,7 +751,7 @@ class GameEngine {
             return;
         }
 
-        const target = this._getPlayerBySocketId(targetSocketId);
+        const target = this._getPlayerByTargetRef(targetRef);
         if (!target || !target.alive) {
             emitError(this.io.to(socketId), ERROR_TYPES.INVALID_TARGET, "الهدف غير صالح أو ميت");
             return;
@@ -760,9 +808,13 @@ class GameEngine {
                     text:  `تم إقصاء ${victim.username} بالتصويت (${victim.role})`,
                 });
             }
-            this.broadcast("voting_result", {
+            this._emitRoleAware("voting_result", {
                 eliminated: victim?.username,
                 role:       victim?.role,
+                tie:        false,
+            }, {
+                eliminated: victim?.username,
+                role:       null,
                 tie:        false,
             });
         } else {
@@ -815,9 +867,20 @@ class GameEngine {
             color:    p.color  || "#1e293b",
         }));
 
-        this.broadcast("game_over", {
+        this._emitRoleAware("game_over", {
             winner,
             roles,
+            rounds,
+            duration: this._formatDuration(duration),
+            stats: {
+                nightKills:         this.gameStats.nightKills,
+                votingEliminations: this.gameStats.votingEliminations,
+                gameLog:            this.gameStats.gameLog,
+                duration,
+            },
+        }, {
+            winner,
+            roles: roles.map((player) => ({ ...player, role: null })),
             rounds,
             duration: this._formatDuration(duration),
             stats: {
