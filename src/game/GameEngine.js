@@ -421,13 +421,11 @@ class GameEngine {
             return { rejected: true, reason: ERROR_TYPES.INVALID_TARGET };
         }
 
-        console.log(`[Repeat-Check] Mafia | Last: ${this.lastMafiaTargetPlayerId} | New: ${target.playerId}`);
+        // ✅ منع استهداف نفس اللاعب ليلتين متتاليتين
         if (this.lastMafiaTargetPlayerId !== null && this.lastMafiaTargetPlayerId === target.playerId) {
-            console.log("[Repeat-Check] Mafia REPEAT DETECTED!");
-            this._emitRoleError(player.playerId, "mafia_error", ERROR_TYPES.MAFIA_REPEAT_TARGET,
-                "لا يمكنك استهداف نفس اللاعب ليلتين متتاليتين",
-                { error: "MAFIA_REPEAT_TARGET" });
-            return { rejected: true, reason: ERROR_TYPES.MAFIA_REPEAT_TARGET };
+            this._emitRoleError(player.playerId, "mafia_error",
+                "لا يمكنك استهداف نفس اللاعب مرتين ❌");
+            return { rejected: true, reason: "MAFIA_REPEAT_TARGET" };
         }
 
         this.nightActions.mafiaTargetPlayerId = target.playerId;
@@ -498,13 +496,11 @@ class GameEngine {
             return { rejected: true, reason: ERROR_TYPES.SELF_TARGET };
         }
 
-        console.log(`[Repeat-Check] Doctor | Last: ${this.lastDoctorTargetPlayerId} | New: ${target.playerId}`);
+        // ✅ منع حماية نفس اللاعب ليلتين متتاليتين
         if (this.lastDoctorTargetPlayerId !== null && this.lastDoctorTargetPlayerId === target.playerId) {
-            console.log("[Repeat-Check] Doctor REPEAT DETECTED!");
-            this._emitRoleError(player.playerId, "doctor_error", ERROR_TYPES.DOCTOR_REPEAT_TARGET,
-                "لا يمكنك حماية نفس اللاعب ليلتين متتاليتين",
-                { error: "DOCTOR_REPEAT_TARGET" });
-            return { rejected: true, reason: ERROR_TYPES.DOCTOR_REPEAT_TARGET };
+            this._emitRoleError(player.playerId, "doctor_error",
+                "لا يمكنك حماية نفس اللاعب مرتين ❌");
+            return { rejected: true, reason: "DOCTOR_REPEAT_TARGET" };
         }
 
         this.nightActions.doctorSavePlayerId = target.playerId;
