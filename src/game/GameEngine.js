@@ -743,6 +743,7 @@ class GameEngine {
 
         logger.phase(this.phase, this.round, this.roomId);
         this.broadcast("voting_started", {});
+        this.broadcast("phase_changed", { phase: this.phase, round: this.round, message: "حان وقت التصويت!" });
     }
 
     registerVote(socketId, targetRef) {
