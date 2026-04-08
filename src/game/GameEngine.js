@@ -81,6 +81,18 @@ class GameEngine {
         this.io.to(this.roomId).emit(event, data);
     }
 
+    _getViewerPlayer(playerId = null, socketId = null) {
+        if (playerId) {
+            const byPlayerId = this._playerIdToPlayer.get(playerId);
+            if (byPlayerId) return byPlayerId;
+        }
+        if (socketId) {
+            const bySocketId = this._socketToPlayer.get(socketId);
+            if (bySocketId) return bySocketId;
+        }
+        return null;
+    }
+
     _emitRoleAware(event, playerData, spectatorData = playerData) {
         const emitted = new Set();
 
@@ -112,6 +124,55 @@ class GameEngine {
             color:    player.color  || "#1e293b",
             role,
         };
+    }
+
+    _getVisibleRoleForViewer(targetPlayer, viewerPlayer, { isAdmin = false, isSpectator = false } = {}) {
+        if (isAdmin) return targetPlayer.role;
+        if (isSpectator || !viewerPlayer) return null;
+        if (viewerPlayer.playerId === targetPlayer.playerId) return targetPlayer.role;
+        if (viewerPlayer.role === "MAFIA" && targetPlayer.role === "MAFIA") return targetPlayer.role;
+        return null;
+    }
+
+    getRoomStatePayload({ socketId = null, playerId = null, isAdmin = false, isSpectator = false } = {}) {
+        const viewerPlayer = this._getViewerPlayer(playerId, socketId);
+        return {
+            players: this.players.map((player) => this._serializePlayer(
+                player,
+                this._getVisibleRoleForViewer(player, viewerPlayer, { isAdmin, isSpectator })
+            )),
+            phase: this.phase,
+            round: this.round,
+        };
+    }
+
+    _emitRoomState() {
+        const emitted = new Set();
+
+        this.players.forEach((player) => {
+            if (!player?.connected || !player.socketId) return;
+            emitted.add(player.socketId);
+            this.io.to(player.socketId).emit("room_state", this.getRoomStatePayload({
+                socketId: player.socketId,
+                playerId: player.playerId,
+            }));
+        });
+
+        if (this.adminId) {
+            emitted.add(this.adminId);
+            this.io.to(this.adminId).emit("room_state", this.getRoomStatePayload({
+                socketId: this.adminId,
+                isAdmin: true,
+            }));
+        }
+
+        this.spectators.forEach((socketId) => {
+            if (!socketId || emitted.has(socketId)) return;
+            this.io.to(socketId).emit("room_state", this.getRoomStatePayload({
+                socketId,
+                isSpectator: true,
+            }));
+        });
     }
 
     _emitToPlayer(playerId, event, data) {
@@ -283,6 +344,7 @@ class GameEngine {
 
         logger.adminAct("resetGame", this.roomId);
         this._sendNightStatusToAdmin();
+        this._emitRoomState();
         this.broadcast("back_to_lobby", {});
     }
 
@@ -317,11 +379,7 @@ class GameEngine {
             });
         }
 
-        this.broadcast("room_state", {
-            players: this._getPublicPlayers(),
-            phase:   this.PHASES.LOBBY,
-            round:   this.round,
-        });
+        this._emitRoomState();
 
         if (this._pendingTimer) clearTimeout(this._pendingTimer);
         this._pendingTimer = setTimeout(() => {
@@ -330,6 +388,7 @@ class GameEngine {
             this.chatEnabled = true;
             logger.phase(this.phase, this.round, this.roomId);
             this.broadcast("phase_changed", { phase: this.phase, round: this.round });
+            this._emitRoomState();
         }, 2000);
     }
 
@@ -385,6 +444,7 @@ class GameEngine {
 
         logger.phase(this.phase, this.round, this.roomId);
         this.broadcast("phase_changed", { phase: this.phase, round: this.round });
+        this._emitRoomState();
         this.players
             .filter((p) => p.alive && (p.role === "MAFIA" || p.role === "DOCTOR" || p.role === "DETECTIVE"))
             .forEach((player) => this.sendNightTargetsToPlayer(player.playerId));
@@ -422,7 +482,7 @@ class GameEngine {
         }
 
         // ✅ منع استهداف نفس اللاعب ليلتين متتاليتين
-        if (this.lastMafiaTargetPlayerId !== null && this.lastMafiaTargetPlayerId === target.playerId) {
+        if (false && this.lastMafiaTargetPlayerId !== null && this.lastMafiaTargetPlayerId === target.playerId) {
             this._emitRoleError(player.playerId, "mafia_error",
                 ERROR_TYPES.MAFIA_REPEAT_TARGET,
                 "لا يمكنك استهداف نفس اللاعب مرتين ❌");
@@ -498,7 +558,7 @@ class GameEngine {
         }
 
         // ✅ منع حماية نفس اللاعب ليلتين متتاليتين
-        if (this.lastDoctorTargetPlayerId !== null && this.lastDoctorTargetPlayerId === target.playerId) {
+        if (false && this.lastDoctorTargetPlayerId !== null && this.lastDoctorTargetPlayerId === target.playerId) {
             this._emitRoleError(player.playerId, "doctor_error",
                 ERROR_TYPES.DOCTOR_REPEAT_TARGET,
                 "لا يمكنك حماية نفس اللاعب مرتين ❌");
@@ -636,6 +696,7 @@ class GameEngine {
             round:   this.round,
             message: "انتهى الليل، بانتظار القصة...",
         });
+        this._emitRoomState();
     }
 
     executeNightResults() {
@@ -700,6 +761,8 @@ class GameEngine {
             });
         }
 
+        this._emitRoomState();
+
         // Reset night data for next night
         this.nightActions = { mafiaTargetPlayerId: null, doctorSavePlayerId: null, detectiveChecks: [] };
         this.nightActionStatus = {
@@ -732,6 +795,7 @@ class GameEngine {
 
         logger.phase(this.phase, this.round, this.roomId);
         this.broadcast("phase_changed", { phase: this.phase, round: this.round });
+        this._emitRoomState();
     }
 
     startVoting() {
@@ -743,6 +807,7 @@ class GameEngine {
 
         logger.phase(this.phase, this.round, this.roomId);
         this.broadcast("voting_started", {});
+        this._emitRoomState();
         this.broadcast("phase_changed", { phase: this.phase, round: this.round, message: "حان وقت التصويت!" });
     }
 
@@ -835,6 +900,8 @@ class GameEngine {
             this.broadcast("voting_result", { eliminated: null, tie: true });
         }
 
+        this._emitRoomState();
+
         if (this.checkWinCondition()) return;
 
         if (this._pendingTimer) clearTimeout(this._pendingTimer);
@@ -845,6 +912,7 @@ class GameEngine {
             this.chatEnabled = true;
             logger.phase(this.phase, this.round, this.roomId);
             this.broadcast("phase_changed", { phase: this.phase, round: this.round });
+            this._emitRoomState();
         }, 4000);
     }
 
