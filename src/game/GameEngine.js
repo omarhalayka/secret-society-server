@@ -1,4 +1,4 @@
-﻿// src/game/GameEngine.js
+// src/game/GameEngine.js
 // @ts-nocheck
 const logger = require("../utils/logger");
 const { emitError, ERROR_TYPES } = require("../utils/errors");
@@ -424,8 +424,9 @@ class GameEngine {
         // ✅ منع استهداف نفس اللاعب ليلتين متتاليتين
         if (this.lastMafiaTargetPlayerId !== null && this.lastMafiaTargetPlayerId === target.playerId) {
             this._emitRoleError(player.playerId, "mafia_error",
+                ERROR_TYPES.MAFIA_REPEAT_TARGET,
                 "لا يمكنك استهداف نفس اللاعب مرتين ❌");
-            return { rejected: true, reason: "MAFIA_REPEAT_TARGET" };
+            return { rejected: true, reason: ERROR_TYPES.MAFIA_REPEAT_TARGET };
         }
 
         this.nightActions.mafiaTargetPlayerId = target.playerId;
@@ -499,8 +500,9 @@ class GameEngine {
         // ✅ منع حماية نفس اللاعب ليلتين متتاليتين
         if (this.lastDoctorTargetPlayerId !== null && this.lastDoctorTargetPlayerId === target.playerId) {
             this._emitRoleError(player.playerId, "doctor_error",
+                ERROR_TYPES.DOCTOR_REPEAT_TARGET,
                 "لا يمكنك حماية نفس اللاعب مرتين ❌");
-            return { rejected: true, reason: "DOCTOR_REPEAT_TARGET" };
+            return { rejected: true, reason: ERROR_TYPES.DOCTOR_REPEAT_TARGET };
         }
 
         this.nightActions.doctorSavePlayerId = target.playerId;
@@ -586,14 +588,13 @@ class GameEngine {
         const finalVictimPlayerId = (mafiaTargetPlayerId && mafiaTargetPlayerId !== doctorSavePlayerId) ? mafiaTargetPlayerId : null;
 
         // Update last targets (stable playerId)
-        if (mafiaTargetPlayerId)  {
-            this.lastMafiaTargetPlayerId = mafiaTargetPlayerId;
-            console.log("[Persist] lastMafiaTargetPlayerId updated in endNight:", this.lastMafiaTargetPlayerId);
-        }
-        if (doctorSavePlayerId) {
-            this.lastDoctorTargetPlayerId = doctorSavePlayerId;
-            console.log("[Persist] lastDoctorTargetPlayerId updated in endNight:", this.lastDoctorTargetPlayerId);
-        }
+        // If a role acted this night, store their target for the consecutive-night restriction.
+        // If a role did NOT act (skipped), clear the restriction so it doesn't persist forever.
+        this.lastMafiaTargetPlayerId = mafiaTargetPlayerId || null;
+        console.log("[Persist] lastMafiaTargetPlayerId updated in endNight:", this.lastMafiaTargetPlayerId);
+
+        this.lastDoctorTargetPlayerId = doctorSavePlayerId || null;
+        console.log("[Persist] lastDoctorTargetPlayerId updated in endNight:", this.lastDoctorTargetPlayerId);
 
         console.log("[GameEngine] endNight — final state", {
             roomId:                  this.roomId,
@@ -654,14 +655,12 @@ class GameEngine {
         }
 
         // Update last targets BEFORE clearing nightActions
-        if (mafiaTargetPlayerId) {
-            this.lastMafiaTargetPlayerId = mafiaTargetPlayerId;
-            console.log("[Persist] lastMafiaTargetPlayerId updated in executeNightResults:", this.lastMafiaTargetPlayerId);
-        }
-        if (doctorSavePlayerId) {
-            this.lastDoctorTargetPlayerId = doctorSavePlayerId;
-            console.log("[Persist] lastDoctorTargetPlayerId updated in executeNightResults:", this.lastDoctorTargetPlayerId);
-        }
+        // Same logic as endNight: unconditionally set so skipped nights clear the restriction
+        this.lastMafiaTargetPlayerId = mafiaTargetPlayerId || null;
+        console.log("[Persist] lastMafiaTargetPlayerId updated in executeNightResults:", this.lastMafiaTargetPlayerId);
+
+        this.lastDoctorTargetPlayerId = doctorSavePlayerId || null;
+        console.log("[Persist] lastDoctorTargetPlayerId updated in executeNightResults:", this.lastDoctorTargetPlayerId);
 
         const mafiaTarget = this._playerIdToPlayer.get(mafiaTargetPlayerId);
         const doctorSave  = this._playerIdToPlayer.get(doctorSavePlayerId);
