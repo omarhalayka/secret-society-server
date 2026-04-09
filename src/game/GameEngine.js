@@ -220,20 +220,22 @@ class GameEngine {
         if (player.role === "MAFIA") {
             const mafiaPlayers = alivePlayers.filter((p) => p.role === "MAFIA");
             const mafiaTargets = alivePlayers.filter((p) => p.role !== "MAFIA");
+            const restrictedTargetId = this._getAliveRestrictedTargetId(this.lastMafiaTargetPlayerId);
             return {
                 players:   mafiaTargets.map((p) => this._serializePlayer(p, null)),
-                lastTarget:this.lastMafiaTargetPlayerId,
+                lastTarget: restrictedTargetId,
                 teamCount: mafiaPlayers.length,
                 self:      this._serializePlayer(player, "MAFIA"),
             };
         }
 
         if (player.role === "DOCTOR") {
+            const restrictedTargetId = this._getAliveRestrictedTargetId(this.lastDoctorTargetPlayerId);
             return {
                 players: alivePlayers
                     .filter((p) => p.playerId !== player.playerId)
                     .map((p) => this._serializePlayer(p, null)),
-                lastTarget: this.lastDoctorTargetPlayerId,
+                lastTarget: restrictedTargetId,
                 self:       this._serializePlayer(player, "DOCTOR"),
             };
         }
@@ -265,6 +267,13 @@ class GameEngine {
 
     _getPublicPlayers() {
         return this.players.map((p) => this._serializePlayer(p, null));
+    }
+
+    _getAliveRestrictedTargetId(lastTargetPlayerId) {
+        if (!lastTargetPlayerId) return null;
+        const target = this._playerIdToPlayer.get(lastTargetPlayerId);
+        if (!target?.alive) return null;
+        return target.playerId;
     }
 
     _getPlayerBySocketId(socketId) {
@@ -482,10 +491,10 @@ class GameEngine {
         }
 
         // ✅ منع استهداف نفس اللاعب ليلتين متتاليتين
-        if (false && this.lastMafiaTargetPlayerId !== null && this.lastMafiaTargetPlayerId === target.playerId) {
+        if (this._getAliveRestrictedTargetId(this.lastMafiaTargetPlayerId) === target.playerId) {
             this._emitRoleError(player.playerId, "mafia_error",
                 ERROR_TYPES.MAFIA_REPEAT_TARGET,
-                "لا يمكنك استهداف نفس اللاعب مرتين ❌");
+                "Target is locked for this round");
             return { rejected: true, reason: ERROR_TYPES.MAFIA_REPEAT_TARGET };
         }
 
@@ -558,10 +567,10 @@ class GameEngine {
         }
 
         // ✅ منع حماية نفس اللاعب ليلتين متتاليتين
-        if (false && this.lastDoctorTargetPlayerId !== null && this.lastDoctorTargetPlayerId === target.playerId) {
+        if (this._getAliveRestrictedTargetId(this.lastDoctorTargetPlayerId) === target.playerId) {
             this._emitRoleError(player.playerId, "doctor_error",
                 ERROR_TYPES.DOCTOR_REPEAT_TARGET,
-                "لا يمكنك حماية نفس اللاعب مرتين ❌");
+                "Target is locked for this round");
             return { rejected: true, reason: ERROR_TYPES.DOCTOR_REPEAT_TARGET };
         }
 
