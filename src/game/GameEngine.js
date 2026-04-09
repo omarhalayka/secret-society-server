@@ -113,7 +113,7 @@ class GameEngine {
         });
     }
 
-    _serializePlayer(player, role = null) {
+    _serializePlayer(player, role = null, extra = {}) {
         return {
             id:       player.playerId,
             playerId: player.playerId,
@@ -123,6 +123,7 @@ class GameEngine {
             avatar:   player.avatar || "😎",
             color:    player.color  || "#1e293b",
             role,
+            ...extra,
         };
     }
 
@@ -132,6 +133,24 @@ class GameEngine {
         if (viewerPlayer.playerId === targetPlayer.playerId) return targetPlayer.role;
         if (viewerPlayer.role === "MAFIA" && targetPlayer.role === "MAFIA") return targetPlayer.role;
         return null;
+    }
+
+    _sanitizeSpectatorGameLogEntry(entry) {
+        if (!entry) return entry;
+        const sanitized = { ...entry };
+        if (sanitized.type === "vote" && typeof sanitized.text === "string") {
+            sanitized.text = sanitized.text.replace(/\s*\([^)]*\)\s*$/, "");
+        }
+        return sanitized;
+    }
+
+    _buildSpectatorStats(duration) {
+        return {
+            nightKills: (this.gameStats.nightKills || []).map((entry) => ({ ...entry })),
+            votingEliminations: (this.gameStats.votingEliminations || []).map(({ role, ...entry }) => ({ ...entry })),
+            gameLog: (this.gameStats.gameLog || []).map((entry) => this._sanitizeSpectatorGameLogEntry(entry)),
+            duration,
+        };
     }
 
     getRoomStatePayload({ socketId = null, playerId = null, isAdmin = false, isSpectator = false } = {}) {
@@ -222,8 +241,11 @@ class GameEngine {
             const mafiaTargets = alivePlayers.filter((p) => p.role !== "MAFIA");
             const restrictedTargetId = this._getAliveRestrictedTargetId(this.lastMafiaTargetPlayerId);
             return {
-                players:   mafiaTargets.map((p) => this._serializePlayer(p, null)),
+                players:   mafiaTargets.map((p) => this._serializePlayer(p, null, {
+                    restricted: p.playerId === restrictedTargetId,
+                })),
                 lastTarget: restrictedTargetId,
+                restrictedTargetId,
                 teamCount: mafiaPlayers.length,
                 self:      this._serializePlayer(player, "MAFIA"),
             };
@@ -234,8 +256,11 @@ class GameEngine {
             return {
                 players: alivePlayers
                     .filter((p) => p.playerId !== player.playerId)
-                    .map((p) => this._serializePlayer(p, null)),
+                    .map((p) => this._serializePlayer(p, null, {
+                        restricted: p.playerId === restrictedTargetId,
+                    })),
                 lastTarget: restrictedTargetId,
+                restrictedTargetId,
                 self:       this._serializePlayer(player, "DOCTOR"),
             };
         }
@@ -958,6 +983,8 @@ class GameEngine {
             color:    p.color  || "#1e293b",
         }));
 
+        const spectatorStats = this._buildSpectatorStats(duration);
+
         this._emitRoleAware("game_over", {
             winner,
             roles,
@@ -974,12 +1001,7 @@ class GameEngine {
             roles: roles.map((player) => ({ ...player, role: null })),
             rounds,
             duration: this._formatDuration(duration),
-            stats: {
-                nightKills:         this.gameStats.nightKills,
-                votingEliminations: this.gameStats.votingEliminations,
-                gameLog:            this.gameStats.gameLog,
-                duration,
-            },
+            stats: spectatorStats,
         });
     }
 
